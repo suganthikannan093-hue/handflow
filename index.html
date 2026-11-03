@@ -1,0 +1,10 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>HandFlow – Hands-First Productivity Workspace</title><meta name="theme-color" content="#0b0e1a"/><link rel="icon" href="icon.svg"/><link rel="manifest" href="manifest.webmanifest"/>
+<style>html,body{margin:0;height:100%;background:#0b0e1a;color:#dfe6ff;font-family:system-ui,sans-serif;overflow:hidden}
+#hud{position:fixed;left:24px;bottom:24px;max-width:460px;background:rgba(20,24,44,.85);border:1px solid #3a4680;border-radius:16px;padding:18px 20px}
+h1{margin:0 0 4px;font-size:22px}p{margin:6px 0;font-size:14px;opacity:.85}
+#enter{margin-top:10px;font-size:17px;font-weight:700;padding:12px 22px;border-radius:12px;border:0;background:#4f8cff;color:#fff;cursor:pointer}#enter:disabled{background:#39406a;cursor:default}
+body.in-xr #hud{display:none}</style></head>
+<body><div id="app"></div><div id="hud"><h1>✋ HandFlow</h1><p>Hands-first seated VR workspace: tasks, sticky notes and a focus timer — pinch, drag, poke.</p>
+<p>Desktop: click-drag = pinch-drag, click = poke, A/D = look.</p><button id="enter" disabled>Enter VR</button><p id="status">Checking WebXR…</p></div>
+<script type="module" src="/src/boot.ts"></script></body></html>

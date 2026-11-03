@@ -1,0 +1,30 @@
+{
+  "name": "handflow",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host",
+    "test": "vitest run",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "iwer": "^2.7.0",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.187.0",
+    "@types/webxr": "^0.5.24",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "puppeteer": "^25.16.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.1.0"
+  }
+}
