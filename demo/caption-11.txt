@@ -1,0 +1,1 @@
+Arrange the sticky note beside your tasks (floating preview)

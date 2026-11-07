@@ -1,0 +1,1 @@
+Pinch and drag tasks between columns
