@@ -17,10 +17,28 @@ export class Panel extends THREE.Mesh {
 export const hex = (n: number) => '#' + n.toString(16).padStart(6, '0');
 export function text(g: CanvasRenderingContext2D, s: string, x: number, y: number, size: number, color = '#fff', weight = 600, align: CanvasTextAlign = 'left', maxW?: number) {
   g.font = `${weight} ${size}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`; g.fillStyle = color; g.textAlign = align; g.textBaseline = 'middle';
-  if (maxW) { // simple word wrap
-    const words = s.split(' '); let line = ''; let yy = y; for (const w of words) { const t = line ? line + ' ' + w : w; if (g.measureText(t).width > maxW && line) { g.fillText(line, x, yy); line = w; yy += size * 1.2; } else line = t; } g.fillText(line, x, yy); return;
+  if (maxW) {
+    const words = s.split(' '); let line = ''; let yy = y; for (const w of words) { const t = line ? line + ' ' + w : w; if (measuredWidth(g, t) > maxW && line) { g.fillText(line, x, yy); line = w; yy += size * 1.2; } else line = t; } g.fillText(line, x, yy); return;
   }
   g.fillText(s, x, y);
+}
+/** Canvas measureText is 0 in some headless browsers. Fall back to about 0.55em per glyph. */
+export function measuredWidth(g: CanvasRenderingContext2D, s: string) {
+  const w = g.measureText(s).width;
+  if (w > 0) return w;
+  const size = Number(/(\d+(?:\.\d+)?)px/.exec(g.font)?.[1] ?? 16);
+  return Math.max(1, s.length) * size * 0.55;
+}
+export function ellipsize(g: CanvasRenderingContext2D, s: string, maxW: number) {
+  if (measuredWidth(g, s) <= maxW) return s;
+  let t = s;
+  while (t.length > 1 && measuredWidth(g, t + '…') > maxW) t = t.slice(0, -1);
+  return t + '…';
+}
+export function paintLines(g: CanvasRenderingContext2D, lines: string[], x: number, y: number, size: number, color: string, weight: number, align: CanvasTextAlign, lineH: number) {
+  g.font = `${weight} ${size}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+  g.fillStyle = color; g.textAlign = align; g.textBaseline = 'middle';
+  lines.forEach((line, i) => g.fillText(line, x, y + i * lineH));
 }
 export function button(label: string, w: number, h: number, color: number, icon = '') {
   return new Panel(w, h, 900, (g, W, H, hover) => {

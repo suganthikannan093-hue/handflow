@@ -1,4 +1,4 @@
-// Tiny WebAudio synth for hover/pinch/drop feedback (no asset files).
+// Tiny WebAudio synth for hover/pinch/drop feedback, plus a soft ambient pad. No asset files.
 let ctx: AudioContext | null = null;
 export function unlockAudio() { ctx ??= new AudioContext(); if (ctx.state === 'suspended') ctx.resume(); }
 export function blip(freq: number, dur = 0.06, vol = 0.08, type: OscillatorType = 'sine') {
@@ -9,3 +9,18 @@ export const sfx = {
   hover: () => blip(880, 0.03, 0.03), grab: () => blip(520, 0.07, 0.08, 'triangle'), drop: () => { blip(660, 0.06); setTimeout(() => blip(990, 0.08), 60); },
   press: () => blip(740, 0.05, 0.08, 'square'), done: () => [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => blip(f, 0.15, 0.08), i * 110)),
 };
+
+let pad: { stop: () => void } | null = null;
+export function ambientOn() { return !!pad; }
+/** Two quiet detuned sines. Safe to call again. */
+export function setAmbient(on: boolean) {
+  if (!on) { pad?.stop(); pad = null; return; }
+  if (pad) return;
+  unlockAudio(); if (!ctx) return;
+  const master = ctx.createGain(); master.gain.value = 0.018; master.connect(ctx.destination);
+  const nodes: OscillatorNode[] = [];
+  for (const [freq, type] of [[196, 'sine'], [198.5, 'sine'], [392, 'triangle']] as [number, OscillatorType][]) {
+    const o = ctx.createOscillator(); o.type = type; o.frequency.value = freq; o.connect(master); o.start(); nodes.push(o);
+  }
+  pad = { stop: () => { for (const o of nodes) { try { o.stop(); } catch { /* already stopped */ } } master.disconnect(); pad = null; } };
+}

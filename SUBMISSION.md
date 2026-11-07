@@ -1,6 +1,17 @@
 # HandFlow – Submission notes (Meta VR Start Developer Competition 2026)
 **Deadline: 18 Nov 2026, 12:00 PM PT (= 19 Nov 2026, 12:30 AM IST).** Aim to submit at least 24 h early.
 
+Devpost prose (inspiration, build, what's next, launch date) is in `DEVPOST.md`.
+Track: **Productivity**. Division: **New Experience**. Target public launch: **15 December 2026**.
+
+## Status of the judging package
+- Code: this repo. `npm test` and `npm run test:e2e` cover the board, notes and timer with emulated hand pinches.
+- Try-it link: GitHub Pages from `dist/`. `.github/workflows/pages.yml` builds and deploys on `master`. A token without the `workflow` scope cannot push that file; add it from an account that can update Actions, then set the Pages source to GitHub Actions. Until then, publish `dist/` from a `gh-pages` branch.
+- Demo video: `demo/handflow-demo.mp4`, recorded from the IWER Quest with hand pinches. Upload that file to YouTube or Vimeo and paste the public URL into Devpost. This environment cannot sign in to those sites.
+- Devpost form: paste `DEVPOST.md`. This environment cannot sign in to Devpost or click submit.
+- Meta VR Start membership and Meta developer access: not confirmed from this machine. Check VR Start is active and that developer.meta.com shows the same account before you submit.
+- A physical Quest pass is still outstanding. Pinch `0.02` / `0.035` and palm `0.55` in `src/main.ts` are the numbers to tune.
+
 ## 1. Primary deliverable: WebXR link
 1. Run `npm ci && npm test && npm run build`.
 2. Deploy `dist/` to Netlify, GitHub Pages, Vercel or Cloudflare Pages. It must be **HTTPS**.
