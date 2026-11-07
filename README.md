@@ -81,7 +81,7 @@ WebXR needs a secure context, so pick one of these:
    Then open `http://localhost:5173` on the Quest. Chrome remote debugging works at `chrome://inspect`.
 3. **Deploy (required for judging):** the build uses relative paths (`base: './'`), so `dist/` works on any static host:
    - **Netlify:** `npx netlify deploy --prod --dir=dist`, or drag `dist/` onto app.netlify.com/drop.
-   - **GitHub Pages:** push the repo and publish `dist/`, for example with `npx gh-pages -d dist`, or with a Pages Action that runs `npm ci && npm run build`.
+   - **GitHub Pages:** https://suganthikannan093-hue.github.io/handflow/ is the current build, published from the `gh-pages` branch. `.github/workflows/pages.yml` can rebuild `dist/` on each push to `master` once a token with the `workflow` scope adds that file and the Pages source is GitHub Actions.
    - **Vercel / Cloudflare Pages:** set the build command to `npm run build` and the output folder to `dist`.
 
 Turn on hand tracking on the Quest (Settings → Movement tracking → Hand and body tracking) and put the controllers down. Quest Browser switches to hands automatically.

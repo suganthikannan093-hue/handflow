@@ -6,7 +6,7 @@ Track: **Productivity**. Division: **New Experience**. Target public launch: **1
 
 ## Status of the judging package
 - Code: this repo. `npm test` and `npm run test:e2e` cover the board, notes and timer with emulated hand pinches.
-- Try-it link: GitHub Pages from `dist/`. `.github/workflows/pages.yml` builds and deploys on `master`. A token without the `workflow` scope cannot push that file; add it from an account that can update Actions, then set the Pages source to GitHub Actions. Until then, publish `dist/` from a `gh-pages` branch.
+- Try-it link: https://suganthikannan093-hue.github.io/handflow/ (GitHub Pages, `gh-pages` branch, `dist/` from commit `c9d7d68`). `.github/workflows/pages.yml` is ready locally but was not pushed: the token lacks the `workflow` scope. Add that file from an account that can update Actions, then switch the Pages source to GitHub Actions if you want each `master` push to rebuild.
 - Demo video: `demo/handflow-demo.mp4`, recorded from the IWER Quest with hand pinches. Upload that file to YouTube or Vimeo and paste the public URL into Devpost. This environment cannot sign in to those sites.
 - Devpost form: paste `DEVPOST.md`. This environment cannot sign in to Devpost or click submit.
 - Meta VR Start membership and Meta developer access: not confirmed from this machine. Check VR Start is active and that developer.meta.com shows the same account before you submit.
