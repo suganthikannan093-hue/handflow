@@ -13,6 +13,8 @@
 
 Larger board and readable labels; Start begins focus on its first click; first-launch guided tutorial; three-card column paging; free-space note snapping; timer wall-clock persistence; mobile HUD dismissal and touch instructions; undo; palm menu tested with emulated joints; FPS off by default; no per-frame pixel reads in the tested emulator path.
 
+MR desk placement keeps the toolbar, delete zone and task stands above the tabletop. The restart cue uses its own clear board banner.
+
 ## Voice details
 
 The frontend contains an endpoint URL, never an OpenAI key. The public voice service is https://handflow-voice.adeptacorn256.chatgpt.site. Audio is recorded only after an explicit tap, stops after 20 seconds, and is sent to OpenAI for transcription. HandFlow does not persist it. Errors preserve the text-entry path. Origin checks and in-memory request limits are demo safeguards, not durable billing quotas. A production rollout needs shared quota storage and account-level spend controls.
