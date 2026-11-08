@@ -25,6 +25,16 @@ describe('desk continuity', () => {
     S.save(loaded, kv); const again = S.load(kv);
     expect(again.habit.history.at(-1)?.focusSessions).toBe(1);
   });
+  it('accepts transcriber punctuation in a spoken restart cue without creating another task', () => {
+    for (const words of ['Next step, open the brief.', 'next step: open the brief.', 'Next step — open the brief.', 'next step open the brief.']) {
+      const state = S.createInitialState(); S.parkCard(state, state.cards[0].id, 1);
+      expect(S.runAgent(state, words).kind).toBe('cue');
+      expect(state.cards[0].nextStep).toBe('open the brief.');
+      expect(state.cards).toHaveLength(3);
+    }
+    const empty = S.createInitialState(); expect(S.runAgent(empty, 'Next step, open the brief.').kind).toBe('status');
+    expect(empty.cards).toHaveLength(3);
+  });
   it('a finished focus block earns lasting growth after the live timer resets', () => {
     expect(S.gardenStage()).toBe(0);
     expect(S.gardenStage({ completed: 0, focusSessions: 1 })).toBe(4);

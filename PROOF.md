@@ -7,7 +7,7 @@ Verified on 8 November 2026. This record separates application behavior from phy
 | Check | Command / evidence | Scope |
 |---|---|---|
 | Production build | `npm run build` | TypeScript and Vite production output |
-| State and continuity | `npm test` · 43 tests | Cards, notes, timer clocks, offline expiry, paging, habits, pinning, next-step persistence, undo and garden rewards |
+| State and continuity | `npm test` · 44 tests | Cards, notes, timer clocks, offline expiry, paging, habits, pinning, next-step persistence, undo and garden rewards |
 | Browser workflows | `npm run test:e2e` · 7 scenarios passed | See individual tests below |
 | Voice service | `cd voice-service && npm test` · 3 tests | CORS, missing configuration, formats/size, server-key forwarding, sanitized failures and per-instance limits |
 | Live OpenAI request | WAV fixture → hosted `/api/transcribe` | Response: `{"text":"Draft the opening slide.","provider":"OpenAI"}` |

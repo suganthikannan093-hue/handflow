@@ -56,6 +56,13 @@ test('recorded voice is reviewed before creating a task; service errors have a t
   await expect(page.locator('#task-list')).not.toContainText('Draft the opening slide');
   await page.getByRole('button', { name: 'Use transcript' }).click();
   await expect(page.locator('#task-list')).toContainText('Draft the opening slide');
+  await page.locator('#task-list article').filter({ hasText: 'Draft the opening slide' }).getByRole('button', { name: 'Place on desk' }).click();
+  await page.route('**/api/transcribe', route => route.fulfill({ json: { text: 'Next step, open with the customer problem.' } }));
+  await page.getByRole('button', { name: 'Record a thought' }).click();
+  await page.getByRole('button', { name: 'Record a thought' }).click();
+  await expect(page.locator('#voice-status')).toContainText('Next step,');
+  await page.getByRole('button', { name: 'Use transcript' }).click();
+  await expect(page.locator('#desk-summary')).toContainText('Next step: open with the customer problem.');
   await page.route('**/api/transcribe', route => route.fulfill({ status: 502, json: { error: 'Voice service unavailable. Type your thought instead.' } }));
   await page.getByRole('button', { name: 'Record a thought' }).click();
   await page.getByRole('button', { name: 'Record a thought' }).click();

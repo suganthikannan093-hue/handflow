@@ -418,7 +418,7 @@ export function finishTutorial(s: WorkspaceState, elapsedMs: number, now = new D
   return tutorialPayoff(elapsedMs);
 }
 
-export type AgentKind = 'plan' | 'card' | 'note' | 'empty' | 'focus' | 'park' | 'done' | 'winddown' | 'reviewed' | 'status';
+export type AgentKind = 'cue' | 'plan' | 'card' | 'note' | 'empty' | 'focus' | 'park' | 'done' | 'winddown' | 'reviewed' | 'status';
 export interface AgentResult { kind: AgentKind; reply: string }
 
 function spoken(q: string) { return q.replace(/[?.!]+$/g, '').replace(/^(the|a|my)\s+/i, '').trim(); }
@@ -447,6 +447,12 @@ function firstFreeStand(s: WorkspaceState) {
 export function runAgent(s: WorkspaceState, transcript: string, now = new Date(), timerNow = Date.now()): AgentResult {
   const t = transcript.trim();
   if (!t) return { kind: 'empty', reply: '' };
+  const cue = t.match(/^next step[\s:;,—-]+(.+)/i);
+  if (cue) {
+    const card = s.cards.find(c => c.id === s.focusId && c.column !== 'done') ?? singleParked(s);
+    if (!card || !leaveNextStep(s, card.id, cue[1])) return { kind: 'status', reply: 'Place one open task on your desk first' };
+    return { kind: 'cue', reply: `Next step saved: ${card.nextStep}` };
+  }
   if (/plan\s+my\s+morning/i.test(t)) { planMorning(s, now); return { kind: 'plan', reply: 'Morning plan is on the board' }; }
   const note = t.match(/^note[:\s]+(.+)/i);
   if (note) { addNote(s, [-0.44, 0.16, 0.12], note[1]); return { kind: 'note', reply: 'Note added' }; }

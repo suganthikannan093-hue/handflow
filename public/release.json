@@ -9,7 +9,7 @@
     "timer reload continuity",
     "accessible desk controls"
   ],
-  "unitTests": 43,
+  "unitTests": 44,
   "browserScenarios": 7,
   "physicalQuestVerified": false
 }

@@ -1267,8 +1267,6 @@ addEventListener('resize', () => {
 setupXR();
 
 function applySaid(said: string) {
-  const next = said.match(/^next step[:\s]+(.+)/i);
-  if (next) { submitThought('next', next[1]); return; }
   remember();
   const act = S.runAgent(state, said, new Date(), Date.now());
   if (act.kind === 'empty' || act.kind === 'status') undos.pop();
@@ -1277,7 +1275,7 @@ function applySaid(said: string) {
     const added = state.cards.at(-1);
     if (added) showCard(added);
   }
-  if (act.kind === 'card' || act.kind === 'plan' || act.kind === 'park' || act.kind === 'done') layoutCards();
+  if (act.kind === 'card' || act.kind === 'plan' || act.kind === 'park' || act.kind === 'done' || act.kind === 'cue') layoutCards();
   if (act.kind === 'note') syncNotes();
   if (act.kind === 'focus' || act.kind === 'done') { refreshTimerBtn(); timerPanel.redraw(); }
   if (act.kind === 'done' || act.kind === 'reviewed') refreshPlant();
