@@ -1,0 +1,15 @@
+{
+  "release": "handflow-2026-11-08-focus",
+  "features": [
+    "custom text capture",
+    "OpenAI recorded voice with review",
+    "quiet focus",
+    "next-step cues",
+    "lasting garden growth",
+    "timer reload continuity",
+    "accessible desk controls"
+  ],
+  "unitTests": 43,
+  "browserScenarios": 7,
+  "physicalQuestVerified": false
+}

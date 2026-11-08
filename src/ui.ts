@@ -3,7 +3,7 @@ import * as THREE from 'three';
 export function roundRect(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
 }
-export class Panel extends THREE.Mesh {
+export class Panel extends THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> {
   canvas: HTMLCanvasElement; g: CanvasRenderingContext2D; tex: THREE.CanvasTexture; w: number; h: number;
   constructor(w: number, h: number, ppm = 900, public draw: (g: CanvasRenderingContext2D, W: number, H: number, hover: boolean) => void = () => {}) {
     const canvas = document.createElement('canvas'); canvas.width = Math.round(w * ppm); canvas.height = Math.round(h * ppm);
@@ -41,9 +41,13 @@ export function paintLines(g: CanvasRenderingContext2D, lines: string[], x: numb
   lines.forEach((line, i) => g.fillText(line, x, y + i * lineH));
 }
 export function button(label: string, w: number, h: number, color: number, icon = '') {
-  return new Panel(w, h, 900, (g, W, H, hover) => {
+  return new Panel(w, h, 1200, (g, W, H, hover) => {
     roundRect(g, 4, 4, W - 8, H - 8, H * 0.3); g.fillStyle = hover ? hex(color) : 'rgba(30,34,52,0.92)'; g.fill();
     g.lineWidth = 6; g.strokeStyle = hex(color); g.stroke();
-    text(g, (icon ? icon + ' ' : '') + label, W / 2, H / 2, H * 0.4, hover ? '#0b0e1a' : '#fff', 700, 'center');
+    const labelText = (icon ? icon + ' ' : '') + label;
+    let size = Math.floor(H * 0.46);
+    g.font = `700 ${size}px system-ui, sans-serif`;
+    while (size > 14 && measuredWidth(g, labelText) > W - 18) { size -= 1; g.font = `700 ${size}px system-ui, sans-serif`; }
+    text(g, labelText, W / 2, H / 2, size, hover ? '#0b0e1a' : '#fff', 700, 'center');
   });
 }

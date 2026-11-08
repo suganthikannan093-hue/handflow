@@ -1,15 +1,28 @@
 import * as THREE from 'three';
 import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.js';
 import * as S from './state';
-import { BOARD_H, BOARD_W, BOARD_Z, COL_W, DOCK_Y, DOCK_Z, EYE, EYE_DROP, PLANT_X, PLANT_Y, PLANT_Z, TIMER_H, TIMER_W, TIMER_Y, TIMER_Z } from './layout';
+import { BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COL_W, COLUMN_PAGE, DESKTOP_CAM_Z, DOCK_Y, DOCK_Z, EYE, EYE_DROP, PLANT_X, PLANT_Y, PLANT_Z, TIMER_H, TIMER_W, TIMER_Y, TIMER_Z } from './layout';
 import { Panel, button, roundRect, text, hex, ellipsize, paintLines, measuredWidth } from './ui';
 import { sfx, unlockAudio, setAmbient } from './audio';
 import { Plant } from './plant';
-import { recognition, planWithModel, AI_KEY_STORAGE } from './voice';
+import { recognition, VoiceCapture, transcribeAudio, voiceConfig } from './voice';
+import { mountCompanion } from './companion';
 
 const state = S.load(localStorage);
 let saveT = 0;
-const persist = () => { clearTimeout(saveT); saveT = window.setTimeout(() => S.save(state, localStorage), 150); };
+let companion: ReturnType<typeof mountCompanion> | undefined;
+const persist = () => { companion?.refresh(); clearTimeout(saveT); saveT = window.setTimeout(() => S.save(state, localStorage), 150); };
+const undos: S.BoardSnap[] = [];
+function remember() {
+  undos.push(S.captureBoard(state));
+  if (undos.length > 30) undos.shift();
+}
+function undoLast() {
+  const snap = undos.pop();
+  if (!snap) return;
+  S.restoreBoard(state, snap);
+  layoutCards(); syncNotes(); refreshPlant(); refreshMode(); timerPanel.redraw(); persist(); sfx.press();
+}
 let templateIdx = state.cards.length;
 const theme = { contrast: false };
 
@@ -23,8 +36,18 @@ document.getElementById('app')!.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0e1a);
 scene.fog = new THREE.Fog(0x0b0e1a, 4, 14);
-const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 50);
-camera.position.set(0, 1.2, 0.35);
+const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.01, 50);
+function frameDesktop() {
+  // Wide windows use DESKTOP_CAM_Z. A phone is narrower than the board, so step back until the board fits.
+  const aspect = Math.max(innerWidth, 1) / Math.max(innerHeight, 1);
+  const vTan = Math.tan((52 * Math.PI) / 360);
+  const boardZ = -0.55 + BOARD_Z;
+  const dist = Math.max(DESKTOP_CAM_Z - boardZ, (BOARD_W / 2 + 0.06) / (vTan * aspect));
+  camera.position.set(0, 1.2, boardZ + dist);
+  camera.aspect = aspect;
+  camera.updateProjectionMatrix();
+}
+frameDesktop();
 scene.add(new THREE.HemisphereLight(0x9fb4ff, 0x1a1030, 1.2));
 const dl = new THREE.DirectionalLight(0xffffff, 1.2); dl.position.set(1, 3, 2); scene.add(dl);
 const grid = new THREE.GridHelper(20, 40, 0x2a3360, 0x161c38); scene.add(grid);
@@ -40,7 +63,6 @@ interface Item { obj: THREE.Object3D; kind: Kind; id?: string; name?: string; on
 const items: Item[] = [];
 const reg = (it: Item) => { items.push(it); it.obj.userData.item = it; it.obj.userData.baseScale = 1; return it; };
 
-const CARD_W = 0.142, CARD_H = 0.046, CARD_SP = 0.052, TOP_Y = 0.055;
 const COL_LABEL: Record<S.Column, string> = { todo: 'To Do', doing: 'Doing', done: 'Done' };
 const COL_COLOR: Record<S.Column, number> = { todo: 0x4f8cff, doing: 0xffb547, done: 0x2fc59b };
 const bg = (alpha = 0.9) => theme.contrast ? '#05070f' : `rgba(16,20,38,${alpha})`;
@@ -48,12 +70,15 @@ const board = new Panel(BOARD_W, BOARD_H, 800, (g, W, H) => {
   roundRect(g, 0, 0, W, H, 36); g.fillStyle = bg(0.92); g.fill();
   g.strokeStyle = theme.contrast ? '#ffffff' : 'rgba(160,180,255,0.55)'; g.lineWidth = theme.contrast ? 8 : 4; g.stroke();
   const mode = state.habit.mode === 'morning' ? 'Morning' : state.habit.mode === 'winddown' ? 'Wind-down' : 'Today';
-  text(g, `${mode}  ·  streak ${state.habit.streak}`, W / 2, 16, 14, '#ffe1a8', 700, 'center');
+  const where = state.placement?.surface === 'desk' ? ' · on your desk' : state.placement?.surface === 'wall' ? ' · on your wall' : '';
+  const waiting = S.parkedCards(state).length;
+  const left = waiting ? ` · ${waiting} left out` : '';
+  text(g, `${mode}  ·  streak ${state.habit.streak}${where}${left}`, W / 2, 18, 16, '#ffe1a8', 700, 'center');
   S.COLUMNS.forEach((c, i) => {
     const x = (0.015 + i * COL_W) / BOARD_W * W; const cw = COL_W / BOARD_W * W;
-    roundRect(g, x + 6, 46, cw - 12, H - 58, 14); g.fillStyle = theme.contrast ? '#101426' : 'rgba(255,255,255,0.05)'; g.fill();
-    g.fillStyle = hex(COL_COLOR[c]); g.fillRect(x + 12, 28, 10, 10);
-    text(g, `${COL_LABEL[c]} · ${S.cardsIn(state, c).length}`, x + 26, 34, 13, '#f4f7ff', 700);
+    roundRect(g, x + 8, 58, cw - 16, H - 74, 16); g.fillStyle = theme.contrast ? '#101426' : 'rgba(255,255,255,0.05)'; g.fill();
+    g.fillStyle = hex(COL_COLOR[c]); g.fillRect(x + 16, 41, 12, 12);
+    text(g, `${COL_LABEL[c]} · ${S.cardsIn(state, c).length}`, x + 36, 47, 18, '#f4f7ff', 700);
   });
 });
 board.position.set(0, 0, BOARD_Z); board.rotation.x = 0.1; ws.add(board);
@@ -66,28 +91,97 @@ function paintCard(card: S.Card, g: CanvasRenderingContext2D, W: number, H: numb
   g.lineWidth = hover || theme.contrast ? 8 : 3; g.strokeStyle = hover || theme.contrast ? '#ffffff' : 'rgba(255,255,255,0.2)'; g.stroke();
   g.fillStyle = hex(card.color); roundRect(g, 4, 4, 16, H - 8, 8); g.fill();
   const done = card.column === 'done';
-  g.font = `650 ${Math.round(H * 0.36)}px system-ui, sans-serif`;
-  const title = ellipsize(g, (done ? '✓ ' : '') + card.title, W - 52);
-  text(g, title, 36, H / 2, H * 0.36, done ? '#8fe8c8' : (theme.contrast && hover ? '#000' : '#fff'), 650);
+  const title = (done ? '✓ ' : '') + card.title;
+  const size = Math.max(22, Math.round(H * (card.nextStep ? 0.25 : 0.32))); 
+  g.font = `650 ${size}px system-ui, sans-serif`;
+  const maxW = W - 40;
+  const words = title.split(' ');
+  const lines: string[] = [];
+  let line = '';
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word;
+    if (line && measuredWidth(g, next) > maxW) { lines.push(line); line = word; } else line = next;
+  }
+  if (line) lines.push(line);
+  const shown = lines.slice(0, 2);
+  if (lines.length > 2) shown[1] = ellipsize(g, shown[1], maxW);
+  const color = done ? '#8fe8c8' : (theme.contrast && hover ? '#000' : '#fff');
+  const block = shown.length * size * 1.15;
+  let y = H / 2 - block / 2 + size * 0.55;
+  for (const ln of shown) { text(g, ln, 26, y - (card.nextStep ? H * 0.1 : 0), size, color, 650); y += size * 1.15; }
+  if (card.nextStep) text(g, '↳ ' + card.nextStep, 26, H * 0.84, Math.max(15, H * 0.16), '#b6f1cf', 650, 'left', W - 44);
 }
 const cardMeshes = new Map<string, Item>();
+const colPage: Record<S.Column, number> = { todo: 0, doing: 0, done: 0 };
+const moreBtns = new Map<S.Column, Item>();
+function cardHeld(id: string) {
+  for (const p of pointers.values()) if (p.grabbed?.id === id) return true;
+  return false;
+}
+function showCard(card: S.Card) {
+  if (card.parked != null) return;
+  const i = S.cardsIn(state, card.column).findIndex(c => c.id === card.id);
+  if (i >= 0) colPage[card.column] = Math.floor(i / COLUMN_PAGE);
+}
 function layoutCards(animate = true) {
-  for (const c of S.COLUMNS) S.cardsIn(state, c).forEach((card, i) => {
+  lastFocusSignature = '';
+  const shown = new Set<string>();
+  for (const col of S.COLUMNS) {
+    const list = S.cardsIn(state, col);
+    const win = S.columnWindow(list.length, colPage[col], COLUMN_PAGE);
+    colPage[col] = win.page;
+    list.slice(win.start, win.start + win.visible).forEach(c => shown.add(c.id));
+    const more = moreBtns.get(col);
+    if (more) {
+      more.obj.visible = win.hidden > 0;
+      const label = `+${win.hidden} more`;
+      if (more.name !== label) {
+        more.name = `button:more:${col}`;
+        more.panel.draw = button(label, 0.14, 0.034, COL_COLOR[col]).draw;
+        more.panel.redraw();
+      }
+    }
+  }
+  for (const card of state.cards) {
     let it = cardMeshes.get(card.id);
     if (!it) {
-      const p = new Panel(CARD_W, CARD_H, 1100, (g, W, H, hover) => paintCard(card, g, W, H, hover));
+      const p = new Panel(CARD_W, CARD_H, 1200, (g, W, H, hover) => paintCard(card, g, W, H, hover));
       it = reg({ obj: p, kind: 'card', id: card.id, name: `card:${card.title}`, panel: p, grabbable: true });
-      cardMeshes.set(card.id, it); boardPlane.add(p);
-      p.position.set(colX(card.column), TOP_Y - i * CARD_SP, 0.004);
+      cardMeshes.set(card.id, it);
+      (card.parked == null ? boardPlane : ws).add(p);
+      p.position.set(colX(card.column), CARD_TOP, 0.004);
       p.scale.setScalar(animate ? 0.01 : 1);
     }
     it.name = `card:${card.title}`;
-    if (it.obj.parent !== boardPlane) return;
-    it.obj.userData.target = new THREE.Vector3(colX(card.column), TOP_Y - i * CARD_SP, 0.004);
+    if (card.parked != null) {
+      const slot = S.DESK_SLOTS[card.parked];
+      if (it.obj.parent !== ws) ws.attach(it.obj);
+      delete it.obj.userData.target;
+      it.obj.visible = true;
+      it.obj.position.set(slot.x, slot.y, slot.z);
+      it.obj.rotation.set(S.DESK_TILT, 0, 0);
+      it.panel.redraw();
+      continue;
+    }
+    const held = cardHeld(card.id);
+    if (!shown.has(card.id) && !held) {
+      it.obj.visible = false;
+      delete it.obj.userData.target;
+      it.panel.redraw();
+      continue;
+    }
+    it.obj.visible = true;
+    if (held) { delete it.obj.userData.target; it.panel.redraw(); continue; }
+    if (it.obj.parent !== boardPlane) { boardPlane.attach(it.obj); it.obj.rotation.set(0, 0, 0); }
+    const list = S.cardsIn(state, card.column);
+    const win = S.columnWindow(list.length, colPage[card.column], COLUMN_PAGE);
+    const i = list.findIndex(c => c.id === card.id) - win.start;
+    it.obj.userData.target = new THREE.Vector3(colX(card.column), CARD_TOP - Math.max(0, i) * CARD_SP, 0.004);
     it.panel.redraw();
-  });
+  }
   for (const [id, it] of cardMeshes) if (!state.cards.find(c => c.id === id)) { it.obj.removeFromParent(); items.splice(items.indexOf(it), 1); cardMeshes.delete(id); }
   board.redraw();
+  syncStandLabel();
 }
 
 const noteMeshes = new Map<string, Item>();
@@ -101,6 +195,7 @@ function paintNote(n: S.Note, g: CanvasRenderingContext2D, W: number, H: number,
   paintLines(g, fitted.lines, 18, top + fitted.font * 0.55, fitted.font, '#3a2f00', 700, 'left', fitted.font * 1.25);
 }
 function syncNotes() {
+  lastFocusSignature = '';
   for (const n of state.notes) {
     const size = S.noteSize(n.text);
     let it = noteMeshes.get(n.id);
@@ -125,13 +220,16 @@ function syncNotes() {
   for (const [id, it] of noteMeshes) it.name = id === latest ? 'note:latest' : `note:${id}`;
 }
 
-const timerPanel = new Panel(TIMER_W, TIMER_H, 900, (g, W, H) => {
-  const t = state.timer, rem = S.timerRemaining(t, performance.now()), frac = t.durationMs ? rem / t.durationMs : 0;
+const timerPanel = new Panel(TIMER_W, TIMER_H, 1200, (g, W, H) => {
+  const t = state.timer, rem = S.timerRemaining(t, Date.now()), frac = t.durationMs ? rem / t.durationMs : 0;
   roundRect(g, 0, 0, W, H, 28); g.fillStyle = bg(); g.fill();
   g.strokeStyle = t.running ? '#ff6b8a' : (theme.contrast ? '#fff' : 'rgba(160,180,255,0.55)'); g.lineWidth = theme.contrast ? 8 : 5; g.stroke();
-  text(g, t.mode === 'focus' ? 'FOCUS' : 'BREAK', 20, 28, 20, t.mode === 'focus' ? '#ff9db0' : '#8fe8c8', 800);
-  text(g, `x${t.completed}`, W - 16, 28, 20, '#fff', 700, 'right');
-  text(g, S.formatMs(rem), W / 2, H * 0.46, 42, '#fff', 800, 'center');
+  const focus = state.timer.mode === 'focus' ? (state.cards.find(c => c.id === state.focusId) ?? S.singleParked(state)) : null;
+  g.font = `800 ${focus ? 22 : 26}px system-ui, sans-serif`;
+  const focusLabel = focus ? ellipsize(g, focus.title, W - 120) : (t.mode === 'focus' ? 'FOCUS' : 'BREAK');
+  text(g, focusLabel, 24, 32, focus ? 22 : 26, t.mode === 'focus' ? '#ff9db0' : '#8fe8c8', 800);
+  text(g, t.mode === 'focus' && t.durationMs !== S.FOCUS_MS ? `${Math.round(t.durationMs / 60000)}m focus` : `${t.completed} done`, W - 20, 32, 20, '#fff', 700, 'right');
+  text(g, S.formatMs(rem), W / 2, H * 0.44, 64, '#fff', 800, 'center');
   g.fillStyle = theme.contrast ? '#333' : 'rgba(255,255,255,.15)'; roundRect(g, 18, H * 0.68, W - 36, 10, 5); g.fill();
   g.fillStyle = t.mode === 'focus' ? '#ff6b8a' : '#2fc59b'; roundRect(g, 18, H * 0.68, Math.max(10, (W - 36) * frac), 10, 5); g.fill();
 });
@@ -141,19 +239,23 @@ const mkBtn = (label: string, w: number, color: number, parent: THREE.Object3D, 
   const b = button(label, w, 0.04, color, icon); b.position.set(...pos); parent.add(b);
   return reg({ obj: b, kind: 'button', panel: b, grabbable: false, onPress, name });
 };
-const startBtn = mkBtn('Start', 0.052, 0x2fc59b, timerPanel, [-0.058, -0.04, 0.004], () => {
-  const was = state.timer.running; S.toggleTimer(state.timer, performance.now()); refreshTimerBtn(); persist();
+function armFocusIfStarting(wasRunning: boolean) {
+  if (!wasRunning && state.timer.running && state.timer.mode === 'focus') state.focusId = S.singleParked(state)?.id ?? null;
+}
+const TIMER_BTN_W = 0.11;
+const startBtn = mkBtn('Start', TIMER_BTN_W, 0x2fc59b, timerPanel, [-0.125, -0.048, 0.004], () => {
+  const was = state.timer.running; S.toggleTimer(state.timer, Date.now()); armFocusIfStarting(was); refreshTimerBtn(); timerPanel.redraw(); persist();
   if (!was && state.timer.running) advanceTutorial('timer');
 }, '>', 'button:start');
-mkBtn('Reset', 0.05, 0x9b6bff, timerPanel, [0, -0.04, 0.004], () => { S.resetTimer(state.timer); refreshTimerBtn(); persist(); }, 'R');
-mkBtn('Skip', 0.046, 0x38c6e8, timerPanel, [0.056, -0.04, 0.004], () => {
+mkBtn('Reset', TIMER_BTN_W, 0x9b6bff, timerPanel, [0, -0.048, 0.004], () => { S.resetTimer(state.timer); state.focusId = null; refreshTimerBtn(); timerPanel.redraw(); persist(); }, '', 'button:reset');
+mkBtn('Skip', TIMER_BTN_W, 0x38c6e8, timerPanel, [0.125, -0.048, 0.004], () => {
   state.timer.mode = state.timer.mode === 'focus' ? 'break' : 'focus';
   state.timer.durationMs = state.timer.mode === 'focus' ? S.FOCUS_MS : S.BREAK_MS;
-  S.resetTimer(state.timer); refreshTimerBtn(); persist();
-}, '>');
+  S.resetTimer(state.timer); state.focusId = null; refreshTimerBtn(); timerPanel.redraw(); persist();
+}, '', 'button:skip');
 function refreshTimerBtn() {
   const r = state.timer.running;
-  startBtn.panel.draw = button(r ? 'Pause' : 'Start', 0.052, 0.04, r ? 0xffb547 : 0x2fc59b, r ? '||' : '>').draw;
+  startBtn.panel.draw = button(r ? 'Pause' : 'Start', TIMER_BTN_W, 0.046, r ? 0xffb547 : 0x2fc59b, r ? '||' : '>').draw;
   startBtn.panel.redraw();
 }
 refreshTimerBtn();
@@ -173,55 +275,100 @@ const plus = new Panel(0.062, 0.062, 900, (g, W, H, hover) => {
 const rowX = [-0.195, -0.117, -0.039, 0.039, 0.117, 0.195];
 plus.position.set(rowX[0], 0, 0); dock.add(plus);
 reg({ obj: plus, kind: 'button', name: 'button:plus', panel: plus, grabbable: false, onPress: () => {
-  const c = S.addCard(state, templateIdx++, 'todo'); preview.redraw(); layoutCards(); persist(); sfx.drop(); flash(cardMeshes.get(c.id)!.obj); advanceTutorial('create');
+  remember();
+  const c = S.addCard(state, templateIdx++, 'todo'); showCard(c); preview.redraw(); layoutCards(); persist(); sfx.drop(); flash(cardMeshes.get(c.id)!.obj); advanceTutorial('create');
 } });
-mkBtn('Task', 0.068, 0x4f8cff, dock, [rowX[1], 0, 0], () => { templateIdx++; preview.redraw(); }, '', 'button:task');
+mkBtn('Next', 0.068, 0x4f8cff, dock, [rowX[1], 0, 0], () => { templateIdx++; preview.redraw(); }, '', 'button:next');
 mkBtn('Note', 0.068, 0xffe27a, dock, [rowX[2], 0, 0], () => {
+  remember();
   const n = S.addNote(state, [-(BOARD_W / 2 + 0.12), 0, 0.18]); syncNotes(); persist(); flash(noteMeshes.get(n.id)!.obj);
 }, '+', 'button:note');
 mkBtn('Mic', 0.068, 0xff6b8a, dock, [rowX[3], 0, 0], () => { void toggleMic(); }, '', 'button:mic');
-mkBtn('Plan', 0.068, 0xffb547, dock, [rowX[4], 0, 0], () => { S.planMorning(state); layoutCards(); refreshMode(); persist(); sfx.drop(); }, '', 'button:morning');
+mkBtn('Plan', 0.068, 0xffb547, dock, [rowX[4], 0, 0], () => {
+  remember();
+  const created = S.planMorning(state);
+  if (created[0]) showCard(created[created.length - 1]);
+  layoutCards(); refreshMode(); persist(); sfx.drop();
+}, '', 'button:morning');
 mkBtn('Review', 0.068, 0x9b6bff, dock, [rowX[5], 0, 0], () => { S.startWindDown(state); refreshMode(); persist(); }, '', 'button:review');
 const trashP = new Panel(0.16, 0.04, 900, (g, W, H, hover) => {
   roundRect(g, 4, 4, W - 8, H - 8, 20); g.setLineDash([12, 8]); g.lineWidth = 4;
   g.strokeStyle = hover ? '#ff4d6d' : 'rgba(255,77,109,.7)'; g.stroke();
   text(g, 'Drop to delete', W / 2, H / 2, H * 0.4, '#ffd0da', 650, 'center');
 });
-trashP.position.set(0, -0.062, 0); dock.add(trashP);
+trashP.position.set(-0.06, -0.062, 0); dock.add(trashP);
+mkBtn('Undo', 0.08, 0x8fb4ff, dock, [0.12, -0.062, 0], () => { undoLast(); }, '', 'button:undo');
+for (const col of S.COLUMNS) {
+  const item = mkBtn('+ more', 0.14, COL_COLOR[col], boardPlane, [colX(col), 0.17, 0.008], () => {
+    const win = S.columnWindow(S.cardsIn(state, col).length, colPage[col] + 1, COLUMN_PAGE);
+    colPage[col] = win.page; layoutCards(); sfx.press();
+  }, '', `button:more:${col}`);
+  item.obj.visible = false;
+  moreBtns.set(col, item);
+}
 
-const plant = new Plant(); plant.position.set(PLANT_X, PLANT_Y, PLANT_Z); plant.scale.setScalar(1.05); ws.add(plant);
+const plant = new Plant(); plant.position.set(PLANT_X, PLANT_Y, PLANT_Z); plant.scale.setScalar(1.35); ws.add(plant);
+function focusGrow() {
+  const t = state.timer;
+  if (!(t.running && t.mode === 'focus') || t.durationMs <= 0) return 0;
+  return Math.max(0, Math.min(1, 1 - S.timerRemaining(t, Date.now()) / t.durationMs));
+}
 function refreshPlant() {
   const rec = state.habit.history.find(r => r.date === S.todayKey());
-  plant.setStage(S.plantStage(rec?.completed ?? 0));
+  plant.setGrowth(S.gardenStage(rec), focusGrow());
+}
+
+// Focus has a spatial consequence: the backlog fades while the desk stays within reach.
+const focusCue = new Panel(0.56, 0.055, 1400, (g, W, H) => {
+  const task = state.cards.find(c => c.id === state.focusId) ?? S.singleParked(state);
+  const running = state.timer.running && state.timer.mode === 'focus';
+  const cue = task?.nextStep ? `Next: ${task.nextStep}` : running ? 'One thing. Right here. Let the rest wait.' : task ? 'Ready when you are · Start focus' : 'Leave one task on your desk';
+  roundRect(g, 0, 0, W, H, 18); g.fillStyle = '#102a29'; g.fill();
+  g.font = `650 ${H * 0.36}px system-ui`;
+  text(g, ellipsize(g, cue, W - 32), W / 2, H / 2, H * 0.36, '#b6f1cf', 650, 'center');
+});
+focusCue.position.set(0, -0.225, 0.12); focusCue.rotation.x = S.DESK_TILT; ws.add(focusCue);
+let lastFocusSignature = '';
+function updateQuietFocus() {
+  const quiet = state.onboarded && state.timer.running && state.timer.mode === 'focus' && state.cards.some(c => c.id === state.focusId && c.column !== 'done');
+  const signature = `${quiet}:${state.focusId}:${state.cards.find(c => c.id === state.focusId)?.nextStep || ''}`;
+  if (signature === lastFocusSignature) return;
+  lastFocusSignature = signature;
+  board.material.opacity = quiet ? 0.22 : 1;
+  for (const it of cardMeshes.values()) it.panel.material.opacity = quiet && it.obj.parent === boardPlane ? 0.22 : 1;
+  for (const it of noteMeshes.values()) it.panel.material.opacity = quiet ? 0.28 : 1;
+  focusCue.redraw(); timerPanel.redraw();
 }
 
 let payoffText = '';
-let tutorialT0 = performance.now();
-const tut = new Panel(0.4, 0.09, 1400, (g, W, H) => {
+let tutorialT0 = 0;
+const tut = new Panel(0.66, 0.04, 1400, (g, W, H) => {
   roundRect(g, 0, 0, W, H, 24); g.fillStyle = theme.contrast ? '#000' : 'rgba(79,140,255,0.22)'; g.fill();
   g.strokeStyle = '#ffffff'; g.lineWidth = 4; g.stroke();
   const step = S.TUTORIAL_STEPS[state.tutorialStep];
   const label = payoffText || (step ? `${state.tutorialStep + 1}/${S.TUTORIAL_STEPS.length}  ${step.coach}` : '');
-  text(g, label, W / 2, H / 2, 32, '#fff', 700, 'center', W - 40);
+  text(g, label, W / 2, H / 2, 24, '#fff', 700, 'center', W - 48);
 });
-const coachY = TIMER_Y + TIMER_H / 2 + 0.07;
-tut.position.set(0, coachY, TIMER_Z); ws.add(tut);
+const coachY = 0.125;
+tut.position.set(0, coachY, 0.012); boardPlane.add(tut);
 tut.visible = !state.onboarded;
 function advanceTutorial(id: (typeof S.TUTORIAL_STEPS)[number]['id']) {
   if (state.onboarded || payoffText) return;
   const step = S.TUTORIAL_STEPS[state.tutorialStep];
   if (!step || step.id !== id) return;
+  if (!tutorialT0) tutorialT0 = performance.now();
   state.tutorialStep += 1;
   if (state.tutorialStep >= S.TUTORIAL_STEPS.length) {
     const payoff = S.finishTutorial(state, performance.now() - tutorialT0);
     payoffText = `${payoff.message}. Your streak has started.`;
-    sfx.done(); refreshPlant();
+    sfx.done(); refreshPlant(); board.redraw();
     window.setTimeout(() => { payoffText = ''; tut.visible = false; tut.redraw(); }, 4000);
   }
+  syncStandLabel();
   tut.redraw(); persist();
 }
 function restartTutorial() {
-  state.onboarded = false; state.tutorialStep = 0; payoffText = ''; tutorialT0 = performance.now(); tut.visible = true; tut.redraw(); persist();
+  state.onboarded = false; state.tutorialStep = 0; payoffText = ''; tutorialT0 = 0; tut.visible = true; tut.redraw(); syncStandLabel(); persist();
 }
 
 const modePanel = new Panel(0.4, 0.12, 1100, (g, W, H) => {
@@ -232,12 +379,15 @@ const modePanel = new Panel(0.4, 0.12, 1100, (g, W, H) => {
   } else {
     text(g, `Wind-down  ·  streak ${state.habit.streak}`, 20, 26, 20, '#ffe1a8', 800);
     const lines = S.recentHistory(state.habit, 4).map(r => `${r.date.slice(5)} done ${r.completed}${r.reviewed ? ' reviewed' : ''}`);
-    text(g, lines.join('  ·  ') || 'Nothing saved yet', 20, 62, 16, '#fff', 600, 'left', W - 36);
+    g.font = '600 16px system-ui, sans-serif';
+    const left = S.parkedCards(state).map(c => c.title);
+    const line = left.length ? ellipsize(g, `Still out: ${left.join(', ')}`, W - 36) : (lines.join('  ·  ') || 'Nothing saved yet');
+    text(g, line, 20, 62, 16, '#fff', 600, 'left', W - 36);
   }
 });
 modePanel.position.set(0, coachY, TIMER_Z); modePanel.visible = false; ws.add(modePanel);
-const modeFocus = mkBtn('Focus', 0.07, 0x2fc59b, modePanel, [0.12, -0.04, 0.004], () => { S.startTimer(state.timer, performance.now()); refreshTimerBtn(); persist(); }, '>');
-const modeDone = mkBtn('Reviewed', 0.09, 0xffb547, modePanel, [0.12, -0.04, 0.004], () => { S.completeReview(state); refreshMode(); refreshPlant(); persist(); sfx.done(); });
+const modeFocus = mkBtn('Focus', 0.07, 0x2fc59b, modePanel, [0.12, -0.04, 0.004], () => { const was = state.timer.running; S.startTimer(state.timer, Date.now()); armFocusIfStarting(was); refreshTimerBtn(); timerPanel.redraw(); persist(); }, '>');
+const modeDone = mkBtn('Reviewed', 0.09, 0xffb547, modePanel, [0.12, -0.04, 0.004], () => { S.completeReview(state); refreshMode(); refreshPlant(); persist(); sfx.done(); }, '', 'button:reviewed');
 function refreshMode() {
   const show = state.onboarded && state.habit.mode !== 'work';
   modePanel.visible = show; tut.visible = !state.onboarded && !payoffText ? true : tut.visible && !state.onboarded;
@@ -248,7 +398,7 @@ function refreshMode() {
 }
 
 const settings = new THREE.Group(); settings.position.set(0, -0.02, 0.08); settings.visible = false; ws.add(settings);
-const settingsBg = new Panel(0.36, 0.16, 900, (g, W, H) => { roundRect(g, 0, 0, W, H, 24); g.fillStyle = bg(); g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 4; g.stroke(); text(g, 'Accessibility', W / 2, 28, 22, '#fff', 800, 'center'); });
+const settingsBg = new Panel(0.36, 0.2, 900, (g, W, H) => { roundRect(g, 0, 0, W, H, 24); g.fillStyle = bg(); g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 4; g.stroke(); text(g, 'Accessibility', W / 2, 28, 22, '#fff', 800, 'center'); });
 settings.add(settingsBg);
 function toggleSetting(key: keyof S.A11y, label: string) {
   if (key === 'dwellMs') return;
@@ -258,14 +408,15 @@ function toggleSetting(key: keyof S.A11y, label: string) {
   void label;
 }
 const settingButtons: { key: keyof S.A11y; item: Item; label: string }[] = [];
-function addSetting(label: string, key: keyof S.A11y, x: number, y: number) {
-  const item = mkBtn(label, 0.15, 0x4f8cff, settings, [x, y, 0.004], () => toggleSetting(key, label));
+function addSetting(label: string, key: keyof S.A11y, x: number, y: number, name?: string) {
+  const item = mkBtn(label, 0.15, 0x4f8cff, settings, [x, y, 0.004], () => toggleSetting(key, label), '', name);
   settingButtons.push({ key, item, label });
 }
-addSetting('Contrast', 'highContrast', -0.08, 0.02);
-addSetting('Large', 'largeTargets', 0.08, 0.02);
-addSetting('Look hold', 'lookHold', -0.08, -0.03);
-addSetting('AI planner', 'aiPlanner', 0.08, -0.03);
+addSetting('Contrast', 'highContrast', -0.08, 0.02, 'button:contrast');
+addSetting('Large', 'largeTargets', 0.08, 0.02, 'button:large');
+addSetting('Look hold', 'lookHold', -0.08, -0.03, 'button:hold');
+addSetting('Ambient', 'ambient', 0.08, -0.03, 'button:ambient');
+addSetting('FPS', 'showFps', 0, -0.07, 'button:fps');
 function refreshSettings() {
   for (const s of settingButtons) {
     const on = !!state.a11y[s.key];
@@ -295,6 +446,68 @@ hmBtn('Sound', 0.045, -0.018, 0x2fc59b, () => { state.a11y.ambient = !state.a11y
 hmBtn('Access', -0.045, -0.052, 0xdfe6ff, () => { settings.visible = !settings.visible; refreshSettings(); });
 hmBtn('Exit', 0.045, -0.052, 0xff4d6d, () => renderer.xr.getSession()?.end());
 
+const deskMat = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.006, 28), new THREE.MeshStandardMaterial({ color: 0x243049, roughness: 0.9 }));
+deskMat.position.y = -0.22; deskMat.visible = false; ws.add(deskMat);
+const slotRings = S.DESK_SLOTS.map(slot => {
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.04, 0.05, 24), new THREE.MeshBasicMaterial({ color: 0x8fb4ff, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }));
+  ring.position.set(slot.x, slot.y - 0.02, slot.z);
+  ring.rotation.x = S.DESK_TILT;
+  ws.add(ring);
+  return ring;
+});
+function paintSlots(hover: number) {
+  const teach = !state.onboarded && !payoffText && S.TUTORIAL_STEPS[state.tutorialStep]?.id === 'park';
+  slotRings.forEach((ring, i) => {
+    const mat = ring.material as THREE.MeshBasicMaterial;
+    const taken = state.cards.some(c => c.parked === i);
+    const guide = teach && i === 1;
+    const hot = hover === i || guide;
+    mat.color.setHex(hot ? 0xffe27a : taken ? 0x2fc59b : 0x8fb4ff);
+    mat.opacity = hot ? 0.95 : 0.5;
+    ring.scale.setScalar(guide ? 1 + Math.sin(performance.now() / 180) * 0.12 : 1);
+  });
+}
+const standLabel = new Panel(0.16, 0.028, 512, (g, W, H) => {
+  text(g, 'On the desk', W / 2, H / 2, H * 0.55, '#d5ffe8', 700, 'center');
+});
+standLabel.position.set(0, -0.205, 0.15);
+standLabel.rotation.x = S.DESK_TILT;
+ws.add(standLabel);
+function syncStandLabel() {
+  standLabel.visible = false;
+}
+let dragWord = '';
+const dragHint = new Panel(0.1, 0.026, 256, (g, W, H) => {
+  roundRect(g, 0, 0, W, H, 12);
+  g.fillStyle = dragWord === 'Delete' ? 'rgba(80,16,32,0.92)' : dragWord === 'Stand' ? 'rgba(70,58,16,0.92)' : 'rgba(16,20,38,0.92)';
+  g.fill();
+  g.strokeStyle = '#fff'; g.lineWidth = 3; g.stroke();
+  text(g, dragWord, W / 2, H / 2, H * 0.52, '#fff', 700, 'center');
+});
+dragHint.visible = false; ws.add(dragHint);
+function updateDragHint() {
+  let word = '';
+  let card: THREE.Object3D | null = null;
+  for (const p of pointers.values()) {
+    if (p.grabbed?.kind !== 'card') continue;
+    card = p.grabbed.obj;
+    const x = card.position.x, y = card.position.y, z = card.position.z;
+    const onTrash = overTrash(card);
+    const slot = S.nearestDeskSlot(x, y, z);
+    const onBoard = overBoard(card) != null;
+    word = onTrash ? 'Delete' : slot >= 0 ? 'Stand' : onBoard ? 'Column' : 'Hold';
+    break;
+  }
+  if (!card) { dragHint.visible = false; return; }
+  dragHint.position.set(card.position.x, card.position.y + 0.05, card.position.z);
+  dragHint.rotation.set(S.DESK_TILT, 0, 0);
+  dragHint.visible = true;
+  if (word !== dragWord) { dragWord = word; dragHint.redraw(); }
+}
+function syncPlaceChrome() { deskMat.visible = state.placement?.surface === 'desk'; board.redraw(); }
+const gazeDot = new THREE.Mesh(new THREE.RingGeometry(0.0035, 0.0065, 18), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false }));
+gazeDot.visible = false; gazeDot.renderOrder = 20; scene.add(gazeDot);
+const gazeDir = new THREE.Vector3();
 const reticle = new THREE.Mesh(new THREE.RingGeometry(0.045, 0.055, 32), new THREE.MeshBasicMaterial({ color: 0x4f8cff, side: THREE.DoubleSide }));
 reticle.visible = false; scene.add(reticle);
 const glow = new THREE.Mesh(new THREE.RingGeometry(0.045, 0.053, 32), new THREE.MeshBasicMaterial({ color: 0xffe27a, side: THREE.DoubleSide, transparent: true, opacity: 0.95 }));
@@ -303,12 +516,14 @@ const dwellRing = new THREE.Mesh(new THREE.RingGeometry(0.02, 0.026, 24), new TH
 dwellRing.visible = false; scene.add(dwellRing);
 
 function flash(o: THREE.Object3D) { o.scale.setScalar(0.01); o.userData.pop = o.userData.baseScale ?? 1; }
-function rememberPose() {
+function rememberPose(surface?: 'desk' | 'wall') {
   state.placement = {
     position: [ws.position.x, ws.position.y, ws.position.z],
     quaternion: [ws.quaternion.x, ws.quaternion.y, ws.quaternion.z, ws.quaternion.w],
     anchorId: null,
+    surface,
   };
+  syncPlaceChrome();
   wantAnchor = renderer.xr.isPresenting; persist();
 }
 function recenter() {
@@ -335,7 +550,15 @@ function placeWorkspace(point: THREE.Vector3, normal: THREE.Vector3) {
   ws.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), face);
   ws.position.copy(point);
   if (kind === 'desk') ws.position.y += 0.22; else ws.position.addScaledVector(normal, 0.03);
-  placing = false; reticle.visible = false; rememberPose(); sfx.drop();
+  placing = false; reticle.visible = false; rememberPose(kind); sfx.drop();
+  if (kind === 'desk' && state.onboarded && state.habit.mode === 'work') {
+    payoffText = 'The stands are on your desk.';
+    tut.visible = true; tut.redraw();
+    window.setTimeout(() => {
+      if (payoffText !== 'The stands are on your desk.') return;
+      payoffText = ''; tut.visible = false; tut.redraw();
+    }, 3500);
+  }
 }
 
 function applyA11y() {
@@ -349,37 +572,78 @@ function applyA11y() {
 }
 function redrawAll() {
   board.redraw(); timerPanel.redraw(); preview.redraw(); tut.redraw(); modePanel.redraw(); fpsPanel.redraw(); trashP.redraw(); settingsBg.redraw();
+  standLabel.redraw(); if (dragHint.visible) dragHint.redraw();
   for (const it of items) it.panel.redraw();
 }
 
 let rec: ReturnType<typeof recognition> | null = null;
+const capture = new VoiceCapture();
+let micBusy = false;
+let pendingVoice = '';
+let discardRecording = false;
+let voiceMessage = '';
+let cloudEndpoint = '';
+void voiceConfig().then(c => { cloudEndpoint = c.endpoint; });
+function voiceStatus(message: string) {
+  voiceMessage = message; listenHint = message; preview.redraw();
+  companion?.voice(message, !!pendingVoice);
+}
+const voicePanel = new Panel(0.58, 0.16, 1400, (g, W, H) => {
+  roundRect(g, 0, 0, W, H, 24); g.fillStyle = '#12253a'; g.fill();
+  g.strokeStyle = '#a8e6c4'; g.lineWidth = 4; g.stroke();
+  text(g, pendingVoice ? 'Heard you · review before applying' : 'Voice capture', 26, 28, 24, '#a8e6c4', 800);
+  const fitted = S.fitWrappedText(pendingVoice || voiceMessage, W - 52, H * 0.46, (sample, font) => { g.font = `600 ${font}px system-ui`; return measuredWidth(g, sample); }, 20, 30);
+  paintLines(g, fitted.lines, 26, 62, fitted.font, '#fff', 600, 'left', fitted.font * 1.2);
+});
+voicePanel.position.set(0, coachY + 0.015, TIMER_Z + 0.015); voicePanel.visible = false; ws.add(voicePanel);
+const acceptVoice = mkBtn('Use words', 0.13, 0x2fc59b, voicePanel, [-0.15, -0.055, 0.008], () => usePendingVoice(), '', 'button:voice-accept');
+mkBtn('Cancel', 0.12, 0x9b6bff, voicePanel, [0, -0.055, 0.008], () => { discardRecording = true; capture.stop(); rec?.stop(); pendingVoice = ''; voicePanel.visible = false; voiceStatus('Voice cancelled'); refreshMode(); }, '', 'button:voice-cancel');
+mkBtn('Mic / Stop', 0.13, 0xff6b8a, voicePanel, [0.15, -0.055, 0.008], () => { void toggleMic(); }, '', 'button:voice-stop');
+function showVoicePanel() { voicePanel.visible = true; tut.visible = false; modePanel.visible = false; acceptVoice.obj.visible = !!pendingVoice; voicePanel.redraw(); }
+function gotTranscript(text: string) {
+  if (discardRecording) return;
+  pendingVoice = text.trim();
+  voiceStatus(pendingVoice ? `Heard: ${pendingVoice}` : 'No words heard. Try again or type your thought.');
+  showVoicePanel();
+}
+function usePendingVoice() {
+  if (!pendingVoice) return;
+  const words = pendingVoice; pendingVoice = ''; voicePanel.visible = false;
+  applySaid(words); companion?.voice('Added to your workspace.'); refreshMode();
+}
 async function toggleMic() {
   unlockAudio();
-  if (listenHint.startsWith('Listening')) { rec?.stop(); listenHint = ''; preview.redraw(); return; }
-  rec = recognition();
-  if (!rec) { listenHint = 'No speech here'; preview.redraw(); return; }
-  listenHint = 'Listening…'; preview.redraw(); sfx.press();
-  rec.onresult = async (ev) => {
-    const said = ev.results[0]?.[0]?.transcript ?? '';
-    listenHint = said.slice(0, 42); preview.redraw();
-    if (state.a11y.aiPlanner && /plan\s+my\s+morning/i.test(said)) {
-      try {
-        const tasks = await planWithModel(said, localStorage.getItem(AI_KEY_STORAGE) ?? '');
-        if (tasks?.length) {
-          for (const title of tasks) S.addCustomCard(state, title);
-          state.habit.mode = 'morning'; layoutCards(); refreshMode(); persist(); sfx.drop(); return;
-        }
-      } catch { /* the template planner still runs */ }
+  if (capture.active) { capture.stop(); voiceStatus('Transcribing with OpenAI…'); showVoicePanel(); return; }
+  if (rec && listenHint.startsWith('Listening')) { rec.stop(); return; }
+  if (micBusy) return;
+  micBusy = true; pendingVoice = ''; discardRecording = false;
+  try {
+    if (cloudEndpoint) {
+      voiceStatus('Opening microphone…'); showVoicePanel();
+      await capture.start(async audio => {
+        if (discardRecording) { micBusy = false; return; }
+        voiceStatus('Transcribing with OpenAI…'); showVoicePanel();
+        try { gotTranscript(await transcribeAudio(audio, cloudEndpoint)); }
+        catch (error) { voiceStatus(error instanceof Error ? error.message : 'Voice failed. Use Capture & desk to type.'); showVoicePanel(); }
+        finally { micBusy = false; }
+      }, error => { micBusy = false; voiceStatus(error.message); showVoicePanel(); });
+      if (discardRecording) { capture.stop(); return; }
+      voiceStatus('Listening · OpenAI · tap Mic to stop'); showVoicePanel();
+      // Busy prevents a second permission request; active recording can still be stopped.
+      return;
     }
-    const kind = S.applyTranscript(state, said);
-    if (kind === 'card' || kind === 'plan') layoutCards();
-    if (kind === 'note') syncNotes();
-    refreshMode(); refreshPlant(); persist(); sfx.drop();
-    if (kind === 'card' || kind === 'plan') advanceTutorial('create');
-  };
-  rec.onerror = () => { listenHint = 'Mic blocked'; preview.redraw(); };
-  rec.onend = () => { if (listenHint === 'Listening…') listenHint = ''; preview.redraw(); };
-  try { rec.start(); } catch { listenHint = 'Mic blocked'; preview.redraw(); }
+    rec = recognition();
+    if (!rec) throw new Error('Voice unavailable here. Open Capture & desk to type.');
+    voiceStatus('Listening · browser speech · tap Mic to stop'); showVoicePanel();
+    rec.onresult = ev => gotTranscript(ev.results[0]?.[0]?.transcript ?? '');
+    rec.onerror = ev => { voiceStatus(ev.error === 'not-allowed' ? 'Microphone permission denied. Open Capture & desk to type.' : 'Could not hear you. Try again or type.'); showVoicePanel(); };
+    rec.onend = () => { micBusy = false; if (listenHint.startsWith('Listening')) { voiceStatus('No words heard. Try again or type.'); showVoicePanel(); } };
+    rec.start();
+  } catch (error) {
+    micBusy = false;
+    voiceStatus(error instanceof DOMException && error.name === 'NotAllowedError' ? 'Microphone permission denied. Open Capture & desk to type.' : error instanceof Error ? error.message : 'Microphone unavailable. Type your thought.');
+    showVoicePanel();
+  }
 }
 
 // ---------- input ----------
@@ -402,15 +666,60 @@ for (let i = 0; i < 2; i++) {
   ctrl.addEventListener('disconnected', () => (ctrl.userData.src = null));
 }
 const cursors = new Map<string, THREE.Mesh>();
-const raycaster = new THREE.Raycaster(); const mouse = new THREE.Vector2(); let mouseDown = false, mouseIn = false;
-addEventListener('pointermove', e => { mouse.set(e.clientX / innerWidth * 2 - 1, -e.clientY / innerHeight * 2 + 1); mouseIn = true; });
-renderer.domElement.addEventListener('pointerdown', () => { unlockAudio(); mouseDown = true; });
-addEventListener('pointerup', () => (mouseDown = false));
+const raycaster = new THREE.Raycaster(); const mouse = new THREE.Vector2(); const mouseDownNDC = new THREE.Vector2();
+let mouseHold = false, mouseLatch = false, mouseIn = false, mouseTravel = 0;
+const touchPoints = new Map<number, number>();
+let lookAnchor: number | null = null;
+function trackLook(e: PointerEvent) {
+  if (e.pointerType === 'mouse') return;
+  touchPoints.set(e.pointerId, e.clientX);
+  if (renderer.xr.isPresenting || touchPoints.size < 2) { lookAnchor = null; return; }
+  const mid = [...touchPoints.values()].reduce((sum, x) => sum + x, 0) / touchPoints.size;
+  // Positive camera yaw looks left, so a rightward two-finger drag looks right.
+  if (lookAnchor != null) camera.rotation.y -= (mid - lookAnchor) * 0.005;
+  lookAnchor = mid;
+}
+function setMouse(e: PointerEvent) {
+  mouse.set(e.clientX / innerWidth * 2 - 1, -e.clientY / innerHeight * 2 + 1);
+  mouseIn = true;
+}
+addEventListener('pointermove', e => {
+  trackLook(e);
+  if (touchPoints.size >= 2) return;
+  setMouse(e);
+  if (mouseHold) mouseTravel = Math.max(mouseTravel, mouse.distanceTo(mouseDownNDC));
+});
+renderer.domElement.addEventListener('pointerdown', e => {
+  trackLook(e);
+  unlockAudio(); setMouse(e); mouseHold = true; mouseLatch = true; mouseTravel = 0; mouseDownNDC.copy(mouse);
+});
+addEventListener('pointerup', e => {
+  touchPoints.delete(e.pointerId);
+  if (touchPoints.size < 2) lookAnchor = null;
+  if (touchPoints.size >= 2) return;
+  if (!mouseHold) return;
+  setMouse(e);
+  mouseTravel = Math.max(mouseTravel, mouse.distanceTo(mouseDownNDC));
+  mouseHold = false; mouseLatch = true;
+});
+addEventListener('pointercancel', e => { touchPoints.delete(e.pointerId); if (touchPoints.size < 2) lookAnchor = null; });
 const keys = new Set<string>();
-addEventListener('keydown', e => keys.add(e.key.toLowerCase()));
+addEventListener('keydown', e => {
+  if ((e.target as HTMLElement)?.closest('input,textarea,select,[contenteditable]')) return;
+  keys.add(e.key.toLowerCase());
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undoLast(); }
+});
 addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 
 const v = new THREE.Vector3(), q = new THREE.Quaternion(), ja = new THREE.Vector3(), jb = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+const deskPoint = new THREE.Vector3(), deskNormal = new THREE.Vector3(), deskPlane = new THREE.Plane();
+const scratchA = new THREE.Vector3(), scratchB = new THREE.Vector3();
+const menuHead = new THREE.Vector3(), menuDir = new THREE.Vector3(), menuN = new THREE.Vector3(), menuTo = new THREE.Vector3();
+const ctrlDir = new THREE.Vector3(), ctrlRayL = new THREE.Ray(), ctrlRayR = new THREE.Ray();
+const glowNudge = new THREE.Vector3();
+const mouseN = new THREE.Vector3(), mousePlane = new THREE.Plane(), zFace = new THREE.Vector3(0, 0, 1);
+const aimPos = new THREE.Vector3(), aimN = new THREE.Vector3();
+const STAND_FACE = S.deskFaceNormal();
 const hitPoint = new THREE.Vector3(), hitNormal = new THREE.Vector3();
 let hitValid = false;
 function boxHit(it: Item, p: THREE.Vector3, slack = state.a11y.largeTargets ? 0.03 : 0.015, depth = 0.03) {
@@ -433,6 +742,7 @@ function pickAt(p: Pointer): Item | null {
 function updatePointers(frame?: XRFrame) {
   const seen = new Set<string>(); const session = renderer.xr.getSession();
   if (session && frame) {
+    mouseLatch = false;
     const ref = renderer.xr.getReferenceSpace();
     if (ref) for (const src of session.inputSources) {
       if (src.hand) {
@@ -446,26 +756,35 @@ function updatePointers(frame?: XRFrame) {
         const d = ja.distanceTo(jb);
         p.pinchPos.copy(ja).add(jb).multiplyScalar(0.5);
         p.tip = (p.tip ?? new THREE.Vector3()).copy(jb); p.ray = null;
-        p.pinching = p.pinching ? d < 0.035 : d < 0.02;
+        p.pinching = S.pinchHeld(d, p.pinching);
         if (src.handedness === 'left') updateHandMenu(frame, src.hand, ref);
       } else if (src.gripSpace || src.targetRaySpace) {
         const i = [...session.inputSources].indexOf(src); const ctrl = renderer.xr.getController(i);
         const p = ptr('ctrl-' + src.handedness); seen.add(p.key);
         ctrl.getWorldPosition(p.pinchPos); ctrl.getWorldQuaternion(q);
-        p.ray = new THREE.Ray(p.pinchPos.clone(), new THREE.Vector3(0, 0, -1).applyQuaternion(q));
+        const ray = src.handedness === 'left' ? ctrlRayL : ctrlRayR;
+        ctrlDir.set(0, 0, -1).applyQuaternion(q);
+        p.ray = ray.set(p.pinchPos, ctrlDir);
         p.tip = null; p.pinching = !!ctrl.userData.sel;
       }
     }
-  } else if (mouseIn) {
-    const p = ptr('mouse'); seen.add(p.key); raycaster.setFromCamera(mouse, camera); p.ray = raycaster.ray.clone(); p.tip = null; p.pinching = mouseDown;
+  } else if (mouseIn && touchPoints.size < 2) {
+    const p = ptr('mouse'); seen.add(p.key); raycaster.setFromCamera(mouse, camera); p.ray = raycaster.ray; p.tip = null; p.pinching = mouseHold || mouseLatch;
     const hit = p.grabbed ? null : pickAt(p);
-    if (p.grabbed && dragPlane) p.ray.intersectPlane(dragPlane, p.pinchPos);
+    if (p.grabbed?.kind === 'card' && mouse.y < -0.08) {
+      ws.updateWorldMatrix(true, false);
+      deskPoint.set(0, S.DESK_SLOTS[1].y, S.DESK_SLOTS[1].z);
+      ws.localToWorld(deskPoint);
+      deskNormal.set(STAND_FACE.x, STAND_FACE.y, STAND_FACE.z);
+      deskNormal.transformDirection(ws.matrixWorld);
+      p.ray.intersectPlane(deskPlane.setFromNormalAndCoplanarPoint(deskNormal, deskPoint), p.pinchPos);
+    } else if (p.grabbed && dragPlane) p.ray.intersectPlane(dragPlane, p.pinchPos);
     else {
       const target = hit?.obj;
       if (target) {
-        const n = new THREE.Vector3(0, 0, 1).applyQuaternion(target.getWorldQuaternion(q));
-        const pl = new THREE.Plane().setFromNormalAndCoplanarPoint(n, target.getWorldPosition(v));
-        p.ray.intersectPlane(pl, p.pinchPos);
+        mouseN.copy(zFace).applyQuaternion(target.getWorldQuaternion(q));
+        mousePlane.setFromNormalAndCoplanarPoint(mouseN, target.getWorldPosition(v));
+        p.ray.intersectPlane(mousePlane, p.pinchPos);
       } else p.ray.at(0.6, p.pinchPos);
     }
   }
@@ -478,11 +797,12 @@ function updatePointers(frame?: XRFrame) {
       for (const it of items) if (it.kind === 'button' && boxHit(it, p.tip, state.a11y.largeTargets ? 0.014 : 0.008, 0.02) < Infinity) poked = it;
       if (poked && p.pokeLatch !== poked) { p.pokeLatch = poked; press(poked); } else if (!poked) p.pokeLatch = null;
     }
+    const quickClick = p.key === 'mouse' && mouseLatch && !mouseHold && mouseTravel < 0.04;
     if (p.pinching && !p.wasPinching) {
       unlockAudio();
-      if (h?.grabbable) { grab(p, h); if (h.kind === 'card') advanceTutorial('pinch'); }
+      if (h?.grabbable && !quickClick) { grab(p, h); if (h.kind === 'card') advanceTutorial('pinch'); }
       else if (h?.kind === 'button') press(h);
-      else if (placing && hitValid) placeWorkspace(hitPoint, hitNormal);
+      else if (placing && hitValid && !quickClick) placeWorkspace(hitPoint, hitNormal);
     }
     if (!p.pinching && p.wasPinching && p.grabbed) release(p);
     if (p.grabbed) {
@@ -490,11 +810,21 @@ function updatePointers(frame?: XRFrame) {
       o.position.copy(o.parent!.worldToLocal(v.copy(p.pinchPos).add(p.offset)));
       trashP.redraw(overTrash(o));
     }
+    if (p.key === 'mouse' && mouseLatch && !mouseHold && p.grabbed) release(p);
+    if (p.key === 'mouse' && mouseLatch) { mouseLatch = false; if (!mouseHold) p.pinching = false; }
     p.wasPinching = p.pinching;
     let c = cursors.get(p.key);
     if (!c) { c = new THREE.Mesh(new THREE.SphereGeometry(0.006, 10, 10), new THREE.MeshBasicMaterial({ color: 0xffffff })); scene.add(c); cursors.set(p.key, c); }
     c.position.copy(p.pinchPos); (c.material as THREE.MeshBasicMaterial).color.set(p.pinching ? 0xff6b8a : 0xffffff); c.visible = !!p.ray || !!h;
   }
+  let hoverSlot = -1;
+  for (const p of pointers.values()) {
+    if (p.grabbed?.kind !== 'card') continue;
+    const o = p.grabbed.obj;
+    hoverSlot = S.nearestDeskSlot(o.position.x, o.position.y, o.position.z);
+  }
+  paintSlots(hoverSlot);
+  updateDragHint();
 }
 function press(it: Item) { sfx.press(); it.obj.userData.pop = it.obj.userData.baseScale ?? 1; it.obj.scale.setScalar((it.obj.userData.baseScale ?? 1) * 0.9); it.onPress?.(); }
 function grab(p: Pointer, it: Item) {
@@ -511,31 +841,60 @@ function grab(p: Pointer, it: Item) {
   p.offset.copy(it.obj.getWorldPosition(new THREE.Vector3())).sub(p.pinchPos);
 }
 function overBoard(o: THREE.Object3D) {
-  const l = board.worldToLocal(o.getWorldPosition(new THREE.Vector3()));
-  return Math.abs(l.x) < BOARD_W / 2 + 0.04 && Math.abs(l.y) < BOARD_H / 2 + 0.04 && Math.abs(l.z) < 0.2 ? l : null;
+  board.worldToLocal(o.getWorldPosition(scratchA));
+  return Math.abs(scratchA.x) < BOARD_W / 2 + 0.04 && Math.abs(scratchA.y) < BOARD_H / 2 + 0.04 && Math.abs(scratchA.z) < 0.2 ? scratchA : null;
 }
 function overTrash(o: THREE.Object3D) {
-  const l = trashP.worldToLocal(o.getWorldPosition(new THREE.Vector3()));
-  return Math.abs(l.x) < 0.1 && Math.abs(l.y) < 0.05 && Math.abs(l.z) < 0.12;
+  trashP.worldToLocal(o.getWorldPosition(scratchB));
+  return Math.abs(scratchB.x) < 0.1 && Math.abs(scratchB.y) < 0.05 && Math.abs(scratchB.z) < 0.12;
+}
+function noteShelf(index: number) {
+  const row = index % 2;
+  const layer = Math.floor(index / 2);
+  return { x: BOARD_W / 2 + 0.1, y: 0.05 - row * 0.14, z: 0.02 + layer * 0.025 };
+}
+function pinnedBlockers(exceptId: string) {
+  const blockers: S.Rect[] = [];
+  for (const card of state.cards) {
+    if (card.parked != null) continue;
+    const it = cardMeshes.get(card.id);
+    if (!it?.obj.visible || it.obj.parent !== boardPlane) continue;
+    blockers.push({ x: it.obj.position.x, y: it.obj.position.y, w: CARD_W, h: CARD_H });
+  }
+  for (const n of state.notes) {
+    if (!n.pinned || n.id === exceptId) continue;
+    const size = S.noteSize(n.text);
+    const local = board.worldToLocal(ws.localToWorld(scratchA.set(n.pos[0], n.pos[1], n.pos[2])));
+    blockers.push({ x: local.x, y: local.y, w: size.w, h: size.h });
+  }
+  return blockers;
 }
 function release(p: Pointer) {
   const it = p.grabbed!; p.grabbed = null; it.obj.scale.setScalar(it.obj.userData.baseScale ?? 1); trashP.redraw(false);
+  remember();
   if (overTrash(it.obj)) {
     it.kind === 'card' ? S.deleteCard(state, it.id!) : S.deleteNote(state, it.id!);
     sfx.grab(); layoutCards(); syncNotes(); refreshPlant(); persist(); return;
   }
   if (it.kind === 'card') {
-    const l = overBoard(it.obj); const card = state.cards.find(c => c.id === it.id)!;
-    boardPlane.attach(it.obj); it.obj.quaternion.identity();
-    if (l) {
+    const card = state.cards.find(c => c.id === it.id)!;
+    const x = it.obj.position.x, y = it.obj.position.y, z = it.obj.position.z;
+    const slot = S.nearestDeskSlot(x, y, z);
+    const l = overBoard(it.obj);
+    // A stand sits inside the board's front volume, so a hand on a stand parks before the column test.
+    if (slot >= 0 && S.parkCard(state, card.id, slot) >= 0) { sfx.pin(); advanceTutorial('park'); syncStandLabel(); }
+    else if (l) {
+      boardPlane.attach(it.obj); it.obj.rotation.set(0, 0, 0);
       const col = S.columnForX(l.x, COL_W);
-      const idx = S.indexForY(l.y, TOP_Y, CARD_SP, S.cardsIn(state, col).filter(c => c.id !== card.id).length);
+      const local = S.indexForY(l.y, CARD_TOP, CARD_SP, COLUMN_PAGE);
+      const idx = colPage[col] * COLUMN_PAGE + local;
       const wasDone = card.column === 'done';
       S.moveCard(state, card.id, col, idx);
+      showCard(card);
       if (col === 'done' && !wasDone) { sfx.done(); refreshPlant(); } else sfx.drop();
       if (col === 'doing' || col === 'done') advanceTutorial('drop');
     } else sfx.drop();
-    layoutCards(); refreshMode(); persist();
+    layoutCards(); refreshMode(); timerPanel.redraw(); persist();
   } else if (it.kind === 'note') {
     let pinned = false; let rot: [number, number, number, number] | undefined;
     for (const surf of [board, timerPanel]) {
@@ -543,9 +902,17 @@ function release(p: Pointer) {
       const l = surf.worldToLocal(it.obj.getWorldPosition(new THREE.Vector3()));
       const panel = surf as Panel;
       if (S.pinToSurface(l.x, l.y, l.z, panel.w / 2, panel.h / 2)) {
-        const x = THREE.MathUtils.clamp(l.x, -panel.w / 2 + 0.02, panel.w / 2 - 0.02);
-        const y = THREE.MathUtils.clamp(l.y, -panel.h / 2 + 0.02, panel.h / 2 - 0.02);
-        const wp = surf.localToWorld(new THREE.Vector3(x, y, 0.012));
+        let x = THREE.MathUtils.clamp(l.x, -panel.w / 2 + 0.02, panel.w / 2 - 0.02);
+        let y = THREE.MathUtils.clamp(l.y, -panel.h / 2 + 0.02, panel.h / 2 - 0.02);
+        let z = 0.012;
+        if (surf === board) {
+          const size = S.noteSize(state.notes.find(n => n.id === it.id)?.text ?? '');
+          const pinnedCount = state.notes.filter(n => n.pinned && n.id !== it.id).length;
+          const free = S.noteSpot(BOARD_W, BOARD_H, size, pinnedBlockers(it.id!), pinnedCount);
+          if (free) { x = free.x; y = free.y; z = 0.012; }
+          else { const spot = noteShelf(pinnedCount); x = spot.x; y = spot.y; z = spot.z; }
+        }
+        const wp = surf.localToWorld(new THREE.Vector3(x, y, z));
         it.obj.position.copy(ws.worldToLocal(wp));
         const localQ = ws.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(surf.getWorldQuaternion(new THREE.Quaternion()));
         it.obj.quaternion.copy(localQ);
@@ -555,23 +922,44 @@ function release(p: Pointer) {
     }
     S.setNote(state, it.id!, [it.obj.position.x, it.obj.position.y, it.obj.position.z], pinned, rot);
     syncNotes(); persist();
-    if (pinned) { sfx.drop(); advanceTutorial('pin'); } else sfx.grab();
+    if (pinned) { sfx.pin(); advanceTutorial('pin'); } else sfx.grab();
   }
 }
+let menuHold = false;
+let palmDot = -2;
 function updateHandMenu(frame: XRFrame, hand: XRHand, ref: XRReferenceSpace) {
+  if (menuHold) {
+    camera.getWorldPosition(menuHead);
+    camera.getWorldDirection(menuDir);
+    handMenu.visible = true;
+    handMenu.position.copy(menuHead).addScaledVector(menuDir, 0.42);
+    handMenu.lookAt(menuHead);
+    return;
+  }
   const get = frame.getJointPose?.bind(frame);
   const wrist = hand.get('wrist'), index = hand.get('index-finger-metacarpal'), pinky = hand.get('pinky-finger-metacarpal');
-  if (!get || !wrist || !index || !pinky) { handMenu.visible = false; return; }
+  if (!get || !wrist || !index || !pinky) { handMenu.visible = false; palmDot = -2; return; }
   const w = get(wrist, ref), i = get(index, ref), k = get(pinky, ref);
-  if (!w || !i || !k) { handMenu.visible = false; return; }
-  const W = ja.set(w.transform.position.x, w.transform.position.y, w.transform.position.z);
-  const I = jb.set(i.transform.position.x, i.transform.position.y, i.transform.position.z).sub(W);
-  const K = v.set(k.transform.position.x, k.transform.position.y, k.transform.position.z).sub(W);
-  const n = new THREE.Vector3().crossVectors(I, K).normalize();
-  const head = camera.getWorldPosition(new THREE.Vector3());
-  const show = n.dot(head.clone().sub(W).normalize()) > 0.55;
+  if (!w || !i || !k) { handMenu.visible = false; palmDot = -2; return; }
+  const wristP = w.transform.position, indexP = i.transform.position, pinkyP = k.transform.position;
+  camera.getWorldPosition(menuHead);
+  const aim = S.palmAim(
+    { x: wristP.x, y: wristP.y, z: wristP.z },
+    { x: indexP.x, y: indexP.y, z: indexP.z },
+    { x: pinkyP.x, y: pinkyP.y, z: pinkyP.z },
+    { x: menuHead.x, y: menuHead.y, z: menuHead.z },
+  );
+  palmDot = aim ? aim.dot : -2;
+  const show = palmDot > 0.55;
   handMenu.visible = show;
-  if (show) { handMenu.position.copy(W).addScaledVector(n, 0.05).add(new THREE.Vector3(0, 0.02, 0)); handMenu.lookAt(head); }
+  if (show && aim) {
+    menuN.set(aim.x, aim.y, aim.z);
+    menuHead.set(wristP.x, wristP.y, wristP.z);
+    handMenu.position.copy(menuHead).addScaledVector(menuN, 0.08);
+    handMenu.position.y += 0.04;
+    camera.getWorldPosition(menuDir);
+    handMenu.lookAt(menuDir);
+  }
 }
 
 let dwellId: string | null = null, dwellElapsed = 0;
@@ -595,6 +983,7 @@ function updateGlow() {
   const step = S.TUTORIAL_STEPS[state.tutorialStep];
   let obj: THREE.Object3D | null = null;
   if (step?.id === 'pinch' || step?.id === 'drop') obj = cardMeshes.get(state.cards.find(c => c.title === 'Reply to emails')?.id ?? '')?.obj ?? board;
+  else if (step?.id === 'park') obj = cardMeshes.get(S.cardsIn(state, 'todo')[0]?.id ?? '')?.obj ?? slotRings[1];
   else if (step?.id === 'create') obj = plus;
   else if (step?.id === 'pin') obj = noteMeshes.get(state.notes.at(-1)?.id ?? '')?.obj ?? board;
   else if (step?.id === 'timer') obj = startBtn.obj;
@@ -602,7 +991,7 @@ function updateGlow() {
   glow.visible = true;
   obj.getWorldPosition(glow.position);
   obj.getWorldQuaternion(glow.quaternion);
-  glow.position.add(new THREE.Vector3(0, 0, 0.01).applyQuaternion(glow.quaternion));
+  glow.position.add(glowNudge.set(0, 0, 0.01).applyQuaternion(glow.quaternion));
   glow.scale.setScalar(1 + Math.sin(performance.now() / 180) * 0.08);
 }
 
@@ -615,6 +1004,7 @@ let liveAnchor: XRAnchor | null = null;
 let followAnchor = false;
 let wantAnchor = false;
 let anchorJob = false;
+let anchorError = '';
 
 function applyEnvironment(mode: 'ar' | 'vr' | 'desktop') {
   const ar = mode === 'ar';
@@ -623,8 +1013,9 @@ function applyEnvironment(mode: 'ar' | 'vr' | 'desktop') {
   grid.visible = !ar; stars.visible = !ar; ring.visible = !ar;
 }
 function parkDesktop() {
-  camera.position.set(0, 1.2, 0.35); camera.rotation.set(0, 0, 0);
+  camera.rotation.set(0, 0, 0);
   ws.position.set(0, 1.2 - EYE_DROP, -0.55); ws.quaternion.identity();
+  frameDesktop();
 }
 async function setupHitTest(session: XRSession) {
   hitSource = null;
@@ -650,6 +1041,8 @@ async function beginSession(prefer: 'ar' | 'vr') {
       if (await navigator.xr.isSessionSupported('immersive-ar')) {
         session = await navigator.xr.requestSession('immersive-ar', {
           requiredFeatures: ['local-floor'],
+          // depth-sensing is omitted on purpose. The emulator implements it by
+          // calling readPixels on a depth target every frame, which stalls the GPU.
           optionalFeatures: ['hand-tracking', 'hit-test', 'plane-detection', 'anchors', 'dom-overlay', 'light-estimation'],
         });
         mode = 'ar';
@@ -663,6 +1056,7 @@ async function beginSession(prefer: 'ar' | 'vr') {
   currentMode = mode;
   applyEnvironment(mode);
   renderer.setPixelRatio(1);
+  renderer.xr.setFramebufferScaleFactor(1);
   (renderer.xr as THREE.WebXRManager & { setFoveation?: (n: number) => void }).setFoveation?.(1);
   await renderer.xr.setSession(session);
   try { await (session as XRSession & { updateTargetFrameRate?: (n: number) => Promise<void> }).updateTargetFrameRate?.(72); } catch { /* device picks the rate */ }
@@ -677,6 +1071,7 @@ async function beginSession(prefer: 'ar' | 'vr') {
 }
 function applyPlacement(p: S.Placement) {
   ws.position.fromArray(p.position); ws.quaternion.fromArray(p.quaternion);
+  syncPlaceChrome();
 }
 function onSessionEnd() {
   document.body.classList.remove('in-xr');
@@ -696,10 +1091,11 @@ async function toggleMode() {
 function updatePlacement(frame?: XRFrame) {
   if (!placing || !frame) { if (!placing) reticle.visible = false; return; }
   const ref = renderer.xr.getReferenceSpace(); if (!ref) return;
+  // The ray you are looking along wins. A nearer plane must not steal a desk hit.
   let pose: XRPose | undefined;
   if (hitSource) { const hits = frame.getHitTestResults(hitSource); if (hits.length) pose = hits[0].getPose(ref); }
-  if (frame.detectedPlanes && frame.detectedPlanes.size) {
-    const cam = camera.getWorldPosition(ja); let best: XRPose | undefined; let bestD = pose ? 0.35 : 1.6;
+  if (!pose && frame.detectedPlanes && frame.detectedPlanes.size) {
+    const cam = camera.getWorldPosition(ja); let best: XRPose | undefined; let bestD = 1.6;
     for (const plane of frame.detectedPlanes) {
       const p = frame.getPose(plane.planeSpace, ref); if (!p) continue;
       const d = jb.set(p.transform.position.x, p.transform.position.y, p.transform.position.z).distanceTo(cam);
@@ -713,7 +1109,7 @@ function updatePlacement(frame?: XRFrame) {
   q.set(pose.transform.orientation.x, pose.transform.orientation.y, pose.transform.orientation.z, pose.transform.orientation.w);
   hitNormal.copy(up).applyQuaternion(q);
   reticle.visible = true; reticle.position.copy(hitPoint);
-  reticle.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), hitNormal);
+  reticle.quaternion.setFromUnitVectors(zFace, hitNormal);
 }
 function updateAnchor(frame?: XRFrame) {
   const ref = renderer.xr.getReferenceSpace(); if (!frame || !ref) return;
@@ -735,7 +1131,7 @@ function updateAnchor(frame?: XRFrame) {
         catch { /* saved pose is the fallback */ }
       }
     })
-    .catch(() => { /* saved pose is the fallback */ })
+    .catch((err) => { anchorError = err instanceof Error ? err.message : String(err); })
     .finally(() => { anchorJob = false; });
 }
 
@@ -743,7 +1139,14 @@ const frameTimer = new THREE.Timer(); let lastSec = -1;
 renderer.setAnimationLoop((time, frame) => {
   frameTimer.update(time);
   const dt = Math.min(frameTimer.getDelta(), 0.05);
-  if (!renderer.xr.isPresenting) { if (keys.has('a')) camera.rotation.y += dt; if (keys.has('d')) camera.rotation.y -= dt; }
+  if (!renderer.xr.isPresenting) { if (keys.has('a')) camera.rotation.y += dt; if (keys.has('d')) camera.rotation.y -= dt; gazeDot.visible = false; }
+  else {
+    camera.getWorldPosition(gazeDot.position);
+    camera.getWorldDirection(gazeDir);
+    gazeDot.position.addScaledVector(gazeDir, 0.42);
+    gazeDot.quaternion.copy(camera.quaternion);
+    gazeDot.visible = true;
+  }
   updatePlacement(frame); updateAnchor(frame); updatePointers(frame); updateDwell(dt); updateGlow();
   for (const it of cardMeshes.values()) {
     const tg = it.obj.userData.target as THREE.Vector3 | undefined;
@@ -756,13 +1159,15 @@ renderer.setAnimationLoop((time, frame) => {
     if (Math.abs(s - base) < 0.002) { it.obj.scale.setScalar(base); delete it.obj.userData.pop; }
   }
   for (const it of cardMeshes.values()) if (it.obj.scale.x < 1 && it.obj.userData.pop == null && !pointersGrab(it)) it.obj.userData.pop = it.obj.userData.baseScale ?? 1;
-  const now = performance.now();
-  if (S.tickTimer(state.timer, now)) {
-    if (state.timer.mode === 'break') S.noteFocusComplete(state);
-    sfx.done(); refreshTimerBtn(); refreshMode(); persist();
+  const now = Date.now();
+  updateQuietFocus();
+  plant.setGrowth(S.gardenStage(state.habit.history.find(r => r.date === S.todayKey())), focusGrow());
+  if (S.advanceWorkspaceTimer(state, now)) {
+    layoutCards(); refreshPlant(); sfx.done(); refreshTimerBtn(); timerPanel.redraw(); refreshMode(); persist();
+    companion?.announce('Focus block finished. Your garden has grown.');
   }
   const sec = Math.floor(S.timerRemaining(state.timer, now) / 1000);
-  if (sec !== lastSec) { lastSec = sec; timerPanel.redraw(); }
+  if (sec !== lastSec) { lastSec = sec; timerPanel.redraw(); focusCue.redraw(); }
   fpsFrames += 1; fpsAccum += dt;
   if (fpsAccum >= 0.5) { fpsValue = Math.round(fpsFrames / fpsAccum); fpsFrames = 0; fpsAccum = 0; if (fpsValue !== fpsShown) { fpsShown = fpsValue; fpsPanel.redraw(); } }
   if (ring.visible) ring.rotation.z += dt * 0.1;
@@ -786,6 +1191,14 @@ function targetHit(name: string): TargetHit | null {
     const n = new THREE.Vector3(0, 0, 1).applyQuaternion(board.getWorldQuaternion(new THREE.Quaternion())).normalize();
     return { position: { x: local.x, y: local.y, z: local.z }, normal: { x: n.x, y: n.y, z: n.z }, size: { x: COL_W * 0.8, y: 0.12, z: 0.01 }, name };
   }
+  if (name.startsWith('desk:')) {
+    const slot = S.DESK_SLOTS[Number(name.slice(5))];
+    if (!slot) return null;
+    ws.updateWorldMatrix(true, false);
+    const p = ws.localToWorld(aimPos.set(slot.x, slot.y, slot.z));
+    aimN.set(STAND_FACE.x, STAND_FACE.y, STAND_FACE.z).transformDirection(ws.matrixWorld);
+    return { position: { x: p.x, y: p.y, z: p.z }, normal: { x: aimN.x, y: aimN.y, z: aimN.z }, size: { x: 0.1, y: 0.06, z: 0.02 }, name };
+  }
   const item = items.find(i => i.name === name) ?? items.find(i => i.kind === 'card' && i.name === name);
   if (!item) return null;
   return put(item.obj, item.panel.w, item.panel.h, name);
@@ -804,13 +1217,24 @@ function registerEmulator() {
       return hit;
     },
     list() {
-      const names = ['board', 'timer', 'column:todo', 'column:doing', 'column:done', ...items.map(i => i.name).filter((n): n is string => !!n)];
+      const names = ['board', 'timer', 'column:todo', 'column:doing', 'column:done', 'desk:0', 'desk:1', 'desk:2', ...items.map(i => i.name).filter((n): n is string => !!n)];
       return names.map(name => { const hit = targetHit(name); return hit ? { name, position: hit.position, size: hit.size } : null; }).filter(Boolean);
     },
   });
 }
 
-layoutCards(false); syncNotes(); refreshPlant(); refreshMode(); applyA11y(); registerEmulator();
+layoutCards(false); syncNotes(); refreshPlant(); refreshMode(); applyA11y(); registerEmulator(); paintSlots(-1);
+function greetDesk() {
+  const waiting = S.parkedCards(state);
+  if (!state.onboarded || !waiting.length || state.habit.mode !== 'work') return;
+  payoffText = waiting.length === 1 ? '1 task is still on your desk' : `${waiting.length} tasks are still on your desk`;
+  tut.visible = true; tut.redraw();
+  window.setTimeout(() => {
+    if (!payoffText.includes('still on your desk')) return;
+    payoffText = ''; tut.visible = false; tut.redraw();
+  }, 4000);
+}
+greetDesk();
 
 const enterBtn = document.getElementById('enter') as HTMLButtonElement, status = document.getElementById('status')!;
 async function setupXR() {
@@ -818,14 +1242,123 @@ async function setupXR() {
   const ar = await navigator.xr.isSessionSupported('immersive-ar').catch(() => false);
   const vr = await navigator.xr.isSessionSupported('immersive-vr').catch(() => false);
   enterBtn.disabled = !ar && !vr;
-  status.textContent = ar ? 'Ready for mixed reality. If passthrough is unavailable, HandFlow opens in VR.' : vr ? 'immersive-ar is unavailable. Enter opens VR.' : 'No immersive session here. Desktop mode is on.';
+  const room = !!(window as unknown as { __iwer?: unknown }).__iwer;
+  status.textContent = ar
+    ? (room
+      ? 'Ready for mixed reality. This emulator shows a room behind the board. On a Quest, that is your passthrough.'
+      : 'Ready for mixed reality. If passthrough is unavailable, HandFlow opens in VR.')
+    : vr ? 'immersive-ar is unavailable. Enter opens VR.' : 'No immersive session here. Desktop mode is on.';
   enterBtn.textContent = ar || state.mrPreferred ? 'Enter MR' : 'Enter VR';
 }
 enterBtn.onclick = async () => { unlockAudio(); await beginSession(state.mrPreferred ? 'ar' : 'vr'); };
-addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+addEventListener('resize', () => {
+  if (!renderer.xr.isPresenting) frameDesktop();
+  renderer.setSize(innerWidth, innerHeight);
+});
 setupXR();
 
+function applySaid(said: string) {
+  const next = said.match(/^next step[:\s]+(.+)/i);
+  if (next) { submitThought('next', next[1]); return; }
+  remember();
+  const act = S.runAgent(state, said, new Date(), Date.now());
+  if (act.kind === 'empty' || act.kind === 'status') undos.pop();
+  listenHint = act.reply.slice(0, 64); preview.redraw(); companion?.announce(act.reply);
+  if (act.kind === 'card' || act.kind === 'plan') {
+    const added = state.cards.at(-1);
+    if (added) showCard(added);
+  }
+  if (act.kind === 'card' || act.kind === 'plan' || act.kind === 'park' || act.kind === 'done') layoutCards();
+  if (act.kind === 'note') syncNotes();
+  if (act.kind === 'focus' || act.kind === 'done') { refreshTimerBtn(); timerPanel.redraw(); }
+  if (act.kind === 'done' || act.kind === 'reviewed') refreshPlant();
+  refreshMode(); persist();
+  if (act.kind === 'done' || act.kind === 'reviewed') sfx.done();
+  else if (act.kind === 'park') sfx.pin();
+  else if (act.kind !== 'empty') sfx.drop();
+  if (act.kind === 'card' || act.kind === 'plan') advanceTutorial('create');
+  if (act.kind === 'park') advanceTutorial('park');
+}
 (window as unknown as { handflow?: unknown }).handflow = {
-  state, recenter, screenOf, fps: () => fpsValue, refresh: () => { refreshMode(); applyA11y(); },
+  state, recenter, screenOf, focusProof: () => ({ quiet: board.material.opacity < 1, plantProgress: plant.focus, plantStage: plant.stage }), voiceProof: () => ({ endpoint: cloudEndpoint, pending: pendingVoice, message: voiceMessage }), fps: () => fpsValue, refresh: () => { refreshMode(); applyA11y(); },
+  dictate: (text: string) => applySaid(text),
+  holdMenu: (on: boolean) => { menuHold = on; },
+  menuOpen: () => handMenu.visible,
+  palmDot: () => palmDot,
+  tutorialOpen: () => tut.visible && !state.onboarded,
+  columnView: () => S.COLUMNS.map(col => ({
+    col,
+    count: S.cardsIn(state, col).length,
+    shown: S.cardsIn(state, col).filter(c => cardMeshes.get(c.id)?.obj.visible).length,
+    bottom: Math.min(...S.cardsIn(state, col).filter(c => cardMeshes.get(c.id)?.obj.visible).map(c => cardMeshes.get(c.id)!.obj.position.y - CARD_H / 2), 1),
+  })),
+  showAccess: (on: boolean) => { settings.visible = on; refreshSettings(); },
   placeTest: (x: number, y: number, z: number, nx: number, ny: number, nz: number) => placeWorkspace(new THREE.Vector3(x, y, z), new THREE.Vector3(nx, ny, nz)),
+  endSession: () => renderer.xr.getSession()?.end(),
+  xr: () => {
+    const session = renderer.xr.getSession();
+    return {
+      presenting: renderer.xr.isPresenting,
+      mode: currentMode,
+      blend: session?.environmentBlendMode ?? null,
+      placing,
+      hit: hitValid,
+      normalY: hitNormal.y,
+      surface: state.placement?.surface ?? null,
+      anchorId: state.placement?.anchorId ?? null,
+      following: followAnchor,
+      clear: scene.background == null,
+      anchorError,
+    };
+  },
+  noteShot: () => {
+    const note = state.notes.at(-1);
+    const it = note ? noteMeshes.get(note.id) : undefined;
+    if (!note || !it) return null;
+    it.panel.redraw();
+    const c = it.panel.canvas;
+    const pixels = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+    const inset = 12;
+    let minY = c.height, maxY = -1, dark = 0;
+    for (let y = inset; y < c.height - inset; y++) {
+      for (let x = inset; x < c.width - inset; x++) {
+        const i = (y * c.width + x) * 4;
+        if (pixels[i + 3] > 200 && pixels[i] < 90 && pixels[i + 1] < 80 && pixels[i + 2] < 40) {
+          dark++;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    return {
+      text: note.text, pinned: note.pinned, pos: note.pos.slice() as [number, number, number],
+      w: it.panel.w, h: it.panel.h, canvasW: c.width, canvasH: c.height,
+      dark, minY, maxY, marginBottom: maxY < 0 ? 0 : c.height - inset - maxY,
+      url: c.toDataURL('image/png'),
+    };
+  },
 };
+
+function submitThought(kind: string, words: string) {
+  if (kind === 'command') { applySaid(words); return; }
+  remember();
+  if (kind === 'note') { S.addNote(state, [-(BOARD_W / 2 + 0.12), 0.02, 0.18], words); syncNotes(); }
+  else if (kind === 'next') {
+    const task = state.cards.find(c => c.id === state.focusId && c.column !== 'done') ?? S.singleParked(state);
+    if (!task || !S.leaveNextStep(state, task.id, words)) { undos.pop(); companion?.announce('Place one open task on your desk first.'); return; }
+    layoutCards(); focusCue.redraw();
+  } else { const card = S.addCustomCard(state, words); showCard(card); layoutCards(); advanceTutorial('create'); }
+  persist(); sfx.drop(); companion?.announce(kind === 'next' ? 'Next step saved with your desk task.' : kind === 'note' ? 'Your note is in the workspace.' : 'Your task is on the board.');
+}
+companion = mountCompanion(state, {
+  submit: submitThought,
+  move: (id, column) => { remember(); S.moveCard(state, id, column); layoutCards(); refreshPlant(); refreshMode(); persist(); companion?.announce('Task moved.'); },
+  park: id => { const slot = S.DESK_SLOTS.findIndex((_, i) => !state.cards.some(c => c.parked === i)); if (slot < 0) { companion?.announce('Your desk is full. Move a task back to the board first.'); return; } remember(); S.parkCard(state, id, slot); layoutCards(); timerPanel.redraw(); persist(); companion?.announce('Task placed on your desk.'); },
+  remove: id => { remember(); S.deleteCard(state, id); layoutCards(); persist(); companion?.announce('Task deleted. Undo is available.'); },
+  timer: () => { startBtn.onPress?.(); companion?.refresh(); },
+  undo: undoLast, mic: () => { void toggleMic(); }, acceptVoice: usePendingVoice,
+  setting: key => toggleSetting(key, key),
+  duration: minutes => { if (state.timer.running) { companion?.announce('Pause the timer before changing its length.'); return; } state.timer.mode = 'focus'; state.timer.durationMs = minutes * 60000; S.resetTimer(state.timer); state.focusId = null; refreshTimerBtn(); timerPanel.redraw(); persist(); companion?.announce(`${minutes}-minute focus selected.`); },
+});
+companion.refresh();
+addEventListener('blur', () => keys.clear());

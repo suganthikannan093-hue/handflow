@@ -1,10 +1,47 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>HandFlow – Hands-First Productivity Workspace</title><meta name="theme-color" content="#0b0e1a"/><link rel="icon" href="icon.svg"/><link rel="manifest" href="manifest.webmanifest"/>
+<title>HandFlow – Hands-First Productivity Workspace</title>
+<meta name="description" content="Give your next task a place. Capture a thought, focus with your hands, grow a garden, and leave a clear way back."/>
+<meta property="og:title" content="HandFlow · One thing, within reach."/><meta property="og:description" content="A hands-first mixed-reality desk for focus, progress, and a clear way back."/><meta property="og:type" content="website"/><meta property="og:url" content="https://suganthikannan093-hue.github.io/handflow/"/><meta name="theme-color" content="#0b0e1a"/><link rel="icon" href="icon.svg"/><link rel="manifest" href="manifest.webmanifest"/>
 <style>html,body{margin:0;height:100%;background:#0b0e1a;color:#dfe6ff;font-family:system-ui,sans-serif;overflow:hidden}
-#hud{position:fixed;left:24px;bottom:24px;max-width:460px;background:rgba(20,24,44,.85);border:1px solid #3a4680;border-radius:16px;padding:18px 20px}
-h1{margin:0 0 4px;font-size:22px}p{margin:6px 0;font-size:14px;opacity:.85}
-#enter{margin-top:10px;font-size:17px;font-weight:700;padding:12px 22px;border-radius:12px;border:0;background:#4f8cff;color:#fff;cursor:pointer}#enter:disabled{background:#39406a;cursor:default}
-body.in-xr #hud{display:none}</style></head>
-<body><div id="app"></div><div id="hud"><h1>✋ HandFlow</h1><p>Hands-first seated workspace: tasks, sticky notes and a focus timer. Pinch, drag, poke. Mixed reality places the board on your desk.</p>
-<p>Desktop: click-drag = pinch-drag, click = poke, A/D = look. Add ?emulate for a Quest 3 with hands.</p><button id="enter" disabled>Enter MR</button><p id="status">Checking WebXR…</p></div>
+#hud{position:fixed;left:12px;top:12px;max-width:min(520px,calc(100vw - 24px));background:rgba(20,24,44,.85);border:1px solid #3a4680;border-radius:14px;padding:8px 10px;pointer-events:none}
+h1{margin:0 52px 0 0;font-size:16px}p{margin:2px 0 0;font-size:12px;opacity:.85}
+#enter,#hud-close{font-weight:700;border-radius:12px;border:0;cursor:pointer;pointer-events:auto}
+#enter{margin-top:8px;font-size:16px;padding:10px 18px;background:#4f8cff;color:#fff}#enter:disabled{background:#39406a;cursor:default}
+#hud-close{position:absolute;top:8px;right:8px;background:transparent;color:#dfe6ff;font-size:13px;padding:4px 8px}
+#hud.compact h1,#hud.compact p{display:none}
+#hud.compact{padding:8px 10px}
+body.in-xr #hud,body.in-xr #open-companion{display:none}
+button,input,select,textarea{font:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid #ffcf74;outline-offset:3px}
+#open-companion{position:fixed;right:12px;top:12px;border:1px solid #8da3d0;border-radius:12px;padding:10px 14px;background:#19233b;color:#fff;font-weight:700;z-index:2}
+#companion{box-sizing:border-box;width:min(580px,calc(100vw - 24px));max-height:calc(100dvh - 32px);padding:24px;border:1px solid #6f8baf;border-radius:22px;background:#101c2d;color:#ecf3fb;overflow:auto}
+#companion::backdrop{background:#020812bb;backdrop-filter:blur(5px)}#companion h2{font-size:26px;margin:0 0 8px}#companion h3{margin:22px 0 8px;font-size:17px}#companion p{font-size:14px;line-height:1.5;margin:8px 0;opacity:1}
+#companion button,#companion select{padding:9px 12px;border-radius:9px;border:1px solid #66809d;background:#20334c;color:#fff}#companion button.primary{background:#a8e6c4;color:#10291e;border-color:#a8e6c4;font-weight:700}#close-companion{float:right}
+#capture-form{display:grid;gap:10px;margin:20px 0}#capture-form label{font-size:14px;font-weight:600}#thought{box-sizing:border-box;resize:vertical;min-height:88px;width:100%;padding:12px;border-radius:10px;background:#091423;color:#fff;border:1px solid #66809d}#capture-kind{width:100%}
+.actions,.task-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.task-actions{margin-top:8px}#task-list article{padding:12px 0;border-bottom:1px solid #33445b}#task-list small{color:#a8e6c4}#companion .fine{font-size:12px;color:#b7c7d9}#announcement{position:fixed;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}#companion fieldset{border:1px solid #4f6681;border-radius:10px;margin-top:20px;display:flex;gap:14px;flex-wrap:wrap}#companion label{line-height:1.8}
+@media(max-width:600px){#open-companion{top:auto;bottom:16px;right:16px;font-size:13px}#companion{padding:18px}}</style></head>
+<body><div id="app"></div><div id="hud"><button id="hud-close" type="button">Hide</button><h1>HandFlow</h1>
+<p id="hud-input"></p><button id="enter" disabled>Enter MR</button><p id="status">Checking WebXR…</p></div>
+<button id="open-companion" type="button" aria-haspopup="dialog">Capture &amp; desk</button>
+<div id="announcement" role="status" aria-live="polite"></div>
+<dialog id="companion" aria-labelledby="companion-title"><button id="close-companion" type="button" aria-label="Close desk">Close</button>
+<h2 id="companion-title">One thing, within reach.</h2><p>Capture a thought. Give it a place. Leave yourself a way back.</p>
+<p id="desk-summary"></p><form id="capture-form"><label for="capture-kind">What are you leaving here?</label><select id="capture-kind"><option value="task">A task</option><option value="note">A note</option><option value="next">A next step for my desk task</option><option value="command">A desk command</option></select><label for="thought">Your words</label><textarea id="thought" maxlength="400" placeholder="Draft the opening slide…" required></textarea><button type="submit" class="primary">Add to my workspace</button></form>
+<div class="actions"><button type="button" id="voice-capture">Record a thought</button><button type="button" id="use-voice" class="primary" hidden>Use transcript</button></div><p id="voice-status" role="status" aria-live="polite">Tap to record, tap again to stop. Review your words before applying.</p><p class="fine">When OpenAI voice is connected, recordings are sent to OpenAI for transcription. HandFlow does not store the audio. Browser speech is a fallback.</p>
+<label for="focus-duration">Focus length</label> <select id="focus-duration"><option value="25">25 minutes</option><option value="5">5 minutes</option><option value="1">1 minute · quick focus / demo</option></select><div class="actions"><button type="button" id="desk-timer">Start focus</button><button type="button" id="desk-undo">Undo last change</button></div>
+<fieldset><legend>Comfort</legend><label><input id="setting-highContrast" type="checkbox"> High contrast</label><label><input id="setting-largeTargets" type="checkbox"> Larger targets</label><label><input id="setting-lookHold" type="checkbox"> Look and hold</label></fieldset>
+<div id="task-list" aria-label="Task board"></div><h3>Notes</h3><div id="note-list"></div><p class="fine">Commands: “start focus”, “park [task]”, “finish [task]”, “next step: [cue]”, “review my day”. Undo: Ctrl/Cmd+Z.</p></dialog>
+<script>
+(function () {
+  var hud = document.getElementById('hud');
+  var coarse = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+  document.getElementById('hud-input').textContent = coarse
+    ? 'Touch: drag a task, tap a button, two fingers look around.'
+    : 'Desktop: drag a task, click a button, A/D look around. Undo is Ctrl+Z.';
+  document.getElementById('hud-close').onclick = function () { hud.classList.add('compact'); };
+  addEventListener('pointerdown', function (e) {
+    if (e.target && e.target.closest && e.target.closest('#hud')) return;
+    hud.classList.add('compact');
+  }, { once: true });
+})();
+</script>
 <script type="module" src="/src/boot.ts"></script></body></html>

@@ -1,6 +1,18 @@
-# ✋ HandFlow – Hands-First Productivity Workspace
+# HandFlow · One thing, within reach.
 
 A seated, hands-only WebXR workspace for Meta Quest: a Kanban board, task cards, pinnable sticky notes and a Pomodoro focus timer, all used by **pinching, dragging and poking**. You don't need controllers (they still work if you have them). Built for the **Meta VR Start Developer Competition 2026 – Productivity track**.
+
+## Latest build
+
+**Capture → place → focus → grow → return.** Give one task a place on your desk, let the backlog fade during focus, and save a concrete next step for tomorrow.
+
+Open **Capture & desk** for custom task/note text, keyboard-operable task controls, comfort settings and a 25/5/1-minute focus selector. **Mic** now records speech through a server-side OpenAI service and shows a transcript for confirmation before applying it. The key stays on the server. A next-step cue stays attached to its task across moves, undo and reload. Completed focus earns lasting garden growth.
+
+- [Release notes](RELEASE-NOTES.md)
+- [Two-minute judge guide](JUDGE-GUIDE.md)
+- [Verification evidence and limitations](PROOF.md)
+- [Submission description](DEVPOST.md)
+- [Voice service](voice-service/README.md)
 
 ## Stack decision
 **WebXR + three.js + the WebXR Hand Input API, built with Vite + TypeScript.** Meta's **IWER** (Immersive Web Emulation Runtime, part of the Immersive Web SDK) handles desktop emulation.
@@ -13,7 +25,7 @@ Why:
 ## Architecture
 ```
 index.html            HUD overlay + "Enter VR" button, PWA manifest link
-src/boot.ts           Optional IWER (Quest 3 + hands) emulator when URL has ?emulate, then loads main
+src/boot.ts           Optional IWER Quest 3 emulator when URL has ?emulate (synthetic room unless &lite), then loads main
 src/state.ts          Pure model: cards, notes, timer, habits, pinning, text fit, tutorial, settings, localStorage
 src/layout.ts         Seated layout kept inside about 30° either side of centre
 src/main.ts           Scene, hands, MR/VR session, hit-test placement, anchors, tutorial, render loop
@@ -30,26 +42,27 @@ public/               manifest.webmanifest, icon.svg
 **Interaction system (`main.ts`)**: each frame, every input source becomes a `Pointer`:
 - **Hands:** the pinch point is the midpoint of the thumb tip and index tip. A pinch starts below 2 cm and releases above 3.5 cm (hysteresis), so a grab doesn't drop while you're dragging. The poke point is the index tip, which presses a button when it enters the button's thin volume. Hits use world-space proximity, not rays, so everything is direct touch within arm's reach.
 - **Controllers (optional):** ray plus trigger.
-- **Mouse (desktop):** a ray through the cursor. Click counts as a pinch, and drags move along a plane parallel to the board.
+- **Mouse (desktop):** a ray through the cursor. Click counts as a pinch. Drags stay on a plane parallel to the board until the cursor is in the lower part of the view, where they move onto the desk stands.
 
 Grabbed cards are lifted, scaled to 108% and follow the pinch. When you release one:
-- Over the board, it snaps to the column and slot under it (`columnForX` / `indexForY`, then `moveCard`) and animates into place.
 - Over 🗑, it's deleted.
-- Anywhere else, it springs back.
+- Over one of the three desk stands in front of the board, it stays there across sessions. A stand in reach wins over the board, because the stands sit just in front of the board face. Those stands sit inside the 30° cone. If exactly one task is out, starting focus puts that title on the timer, and finishing the block moves the task to Done.
+- Over the board, it snaps to the column and slot under it (`columnForX` / `indexForY`, then `moveCard`) and animates into place.
+- Anywhere else, it springs back. A task already on a stand stays on that stand.
 
-Notes dropped on the board or the timer **pin** to that surface, including a drop that is still a short way in front of it (a drag holds the note on a plane). A drop off to the side floats. Long note text wraps and the note grows so the words stay on the card. Every change is saved to `localStorage` (`handflow.v1`). The timer is saved paused, so it resumes cleanly after a reload.
+A column shows three cards. The rest stay behind **+N more**, so a morning plan does not run off the board. Notes dropped on the board snap to a free spot that misses the cards and the other notes. A note that cannot fit there moves beside the board. A drop on the timer still pins there. A drop off to the side floats. **Undo** (or Ctrl+Z / Cmd+Z) puts the last card or note change back. Long note text wraps and the note grows so the words stay on the card. Every change is saved to `localStorage` (`handflow.v1`). A running timer stores a wall-clock end time, so a reload keeps counting.
 
 **Mixed reality:** Enter requests `immersive-ar` (hit-test, plane detection, anchors, hands) and falls back to `immersive-vr`. The palm menu switches MR and VR. In MR, pinch in empty space to put the board on a detected desk or wall. The pose is stored as a persistent anchor when the browser allows it, and always as a saved pose.
 
-**Habits:** Morning Plan and Wind-down Review, a streak, a plant that grows as cards reach Done, and a daily history on device.
+**Habits:** Morning Plan and Wind-down Review, a streak, a plant that grows as cards reach Done and stretches and blooms during a focus block, and a daily history on device. Wind-down names any task still sitting on a desk stand. A return visit says so before you start.
 
-**Tutorial:** five actions (pinch, drop, create, pin, start the timer) with a payoff as soon as you finish. The old six-page text panel is gone.
+**Tutorial:** six actions (pinch, drop, leave a task on a stand, create, pin, start the timer) with a payoff as soon as you finish. While a card is in your hand, a small label says Column, Stand, or Delete. The old text panel is gone.
 
-**Voice:** the Mic button dictates into a new card. "Plan my morning" runs the on-device template planner. The AI planner stays off until Accessibility → AI planner is on and `localStorage.handflow.aiKey` holds your own key. The key is not in the repo.
+**Voice:** tap Mic to record, then tap again to stop (20-second maximum). Recorded audio goes through the server-held OpenAI key; review and accept the transcript before applying it. “next step: …” saves a cue on the one open desk task. The local command parser also parks tasks, starts focus, finishes tasks and opens review. If cloud voice is not configured, browser speech is tried. Errors explain the text fallback in **Capture & desk**. HandFlow does not persist audio. `public/voice-config.json` contains only the endpoint URL; the old browser-local xAI planner is removed. See `voice-service/README.md` for limits and deployment.
 
 **Accessibility:** high contrast, larger targets, look-and-hold, ambient sound, and the fps counter. Settings are saved. The session asks the headset for 72 fps.
 
-**Seated ergonomics:** the whole workspace is one group placed 0.50 m in front of the eyes and 2 cm below eye height. The board, timer and button row stay inside about 30° either side of centre. The board is centred and tilted slightly toward you. The timer sits above the board, with the plant beside it, and the buttons sit in one row below the board, facing you. A side dock would cover the columns at this distance. **Recenter** (in the hand menu) moves the workspace back in front of your current head pose. It also recenters automatically when you enter VR.
+**Seated ergonomics:** the whole workspace is one group placed 0.50 m in front of the eyes and 2 cm below eye height. The timer, button row and desk stands stay inside about 30° either side of centre. The board is about 1.5× the previous panel so the titles fit, so it is wider than that cone. It is centred and tilted slightly toward you. The timer sits above the board, with the plant beside it, and the buttons sit in one row below the board, facing you. On a narrow window the desktop camera steps back until that board fits. The plant grows and blooms while a focus block is running. **Recenter** (in the hand menu) moves the workspace back in front of your current head pose. It also recenters automatically when you enter VR. The session does not request depth sensing: the emulator's depth path reads pixels every frame and stalls the GPU.
 
 **Hand menu:** turn your **left palm toward your face**. The palm normal comes from the wrist and the index and pinky metacarpals. A menu appears above your wrist with **Recenter · Help · Timer · Exit**. Poke it with your right index finger.
 
@@ -68,7 +81,7 @@ npm run smoke     # headless smoke test against dist/ (needs a build first)
 npm run dev       # https://localhost:5173 (self-signed cert, accept the warning)
 ```
 - `https://localhost:5173/` opens mouse mode. Click and drag = pinch and drag, click = poke, A/D = turn your view.
-- `https://localhost:5173/?emulate` loads Meta's IWER Quest 3 emulator with hands, so the **Enter VR** button works on desktop.
+- `https://localhost:5173/?emulate` loads Meta's IWER Quest 3 emulator with hands and a synthetic home office. **Enter MR** then shows that room behind the board (passthrough), and a pinch places the board on the desk and stores an anchor. On a Quest headset the same button uses the real room. This is WebXR hit-testing, not MRUK.
 
 ## Run on Meta Quest
 WebXR needs a secure context, so pick one of these:
@@ -91,7 +104,7 @@ Turn on hand tracking on the Quest (Settings → Movement tracking → Hand and 
 2. **Tutorial:** follow the coach above the timer. Pinch, drop, create, pin, start the timer. The payoff shows your time.
 3. **Move a task:** pinch **"Reply to emails"** in To Do and drag it into **Doing**. It snaps in with a chime, and the column counts update.
 4. **Finish a task:** pinch **"Review pull request"** and drop it in **Done**. A completion arpeggio plays and the card gets a ✓.
-5. **Create tasks:** on the row under the board, poke **Task** to choose a template (the label shows "Next: …"), then poke the blue **+**. A new card pops into To Do. Make two or three.
+5. **Create tasks:** on the row under the board, poke **Next** to change the suggestion (the label shows "Next: …"), then poke the blue **+**. A new card pops into To Do. Make two or three.
 6. **Pin a note:** poke **+ Note**. A yellow sticky note appears to the left of the board. Pinch it and drop it on the board or the timer, and it pins with a red pin. Drop another one in mid-air and it floats.
 7. **Focus timer:** above the board, poke **▶ Start**. The 25:00 countdown begins and the ring turns pink. Poke **⏸ Pause**, then **↺ Reset**. **⏭ Skip** switches between Focus and Break. Finished focus sessions add to 🍅×N.
 8. **Delete:** drag a card onto **🗑 Drop to delete**.
@@ -107,8 +120,8 @@ Reset the demo data: `localStorage.removeItem('handflow.v1')` in the console, th
 
 ## Known limitations
 - Real hand tracking is implemented against the WebXR Hand Input spec and checked in the emulator. It has not been tuned on a physical Quest. Pinch starts under 2 cm and releases over 3.5 cm. The palm menu opens when the palm normal dots the view by more than 0.55.
-- Dictation needs the Web Speech API. Quest Browser may not provide it. The template planner does not need a network.
-- The optional model call is client-side and off by default. Do not put a key in the repo.
+- Recorded dictation needs microphone/MediaRecorder support. The text composer and template planner do not need a network.
+- Cloud voice requires network access and the deployed Worker. Its limits are best effort per instance, not durable billing caps. Do not put a key in the repo.
 - One board, stored on the device. No cloud sync.
 - Persistent anchors depend on the browser. The saved pose is the fallback, and a local-floor origin can shift between sessions.
 - three.js is one large chunk. That is expected on Quest.

@@ -28,5 +28,27 @@ describe('timer', () => {
 });
 describe('persistence', () => {
   it('round-trips and pauses timer', () => { const kv = mem(); const s = S.createInitialState(); S.startTimer(s.timer, 0); S.save(s, kv, 5000); const l = S.load(kv); expect(l.cards.length).toBe(3); expect(l.timer.running).toBe(false); expect(l.timer.remainingMs).toBe(S.FOCUS_MS - 5000); });
+  it('keeps a wall-clock focus across reload', () => {
+    const kv = mem(); const s = S.createInitialState(); const start = Date.now();
+    S.startTimer(s.timer, start); S.save(s, kv, start + 5000); const l = S.load(kv);
+    expect(l.timer.running).toBe(true); expect(l.timer.mode).toBe('focus');
+    expect(l.timer.endsAt).toBe(start + S.FOCUS_MS);
+    expect(l.timer.remainingMs).toBeGreaterThan(S.FOCUS_MS - 30_000);
+    expect(l.timer.remainingMs).toBeLessThanOrEqual(S.FOCUS_MS);
+    expect(Math.abs(l.timer.remainingMs - (l.timer.endsAt! - Date.now()))).toBeLessThan(1000);
+  });
+  it('does not zero a timer when the save clock is wall time and the start clock is not', () => {
+    const kv = mem(); const s = S.createInitialState();
+    S.startTimer(s.timer, 1200); S.save(s, kv);
+    const l = S.load(kv);
+    expect(l.timer.remainingMs).toBe(S.FOCUS_MS); expect(l.timer.running).toBe(false); expect(l.timer.mode).toBe('focus');
+  });
+  it('starts a full focus when the remaining time is already zero', () => {
+    const t = S.createInitialState().timer; t.remainingMs = 0;
+    S.toggleTimer(t, 5000);
+    expect(t.mode).toBe('focus'); expect(t.running).toBe(true);
+    expect(S.timerRemaining(t, 5000)).toBe(S.FOCUS_MS);
+    expect(S.tickTimer(t, 5000)).toBe(false);
+  });
   it('falls back on corrupt data', () => { const kv = mem(); kv.setItem(S.STORAGE_KEY, '{bad'); expect(S.load(kv).cards.length).toBe(3); });
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as S from '../src/state';
-import { fitsComfort, BOARD_H, BOARD_W, BOARD_Z, DOCK_Y, DOCK_Z, DOCK_HALF, TIMER_H, TIMER_Y, TIMER_Z, TIMER_W, PLANT_X } from '../src/layout';
+import { fitsComfort, BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COL_W, COLUMN_PAGE, DESKTOP_CAM_Z, DOCK_Y, DOCK_Z, DOCK_HALF, TIMER_H, TIMER_Y, TIMER_Z, TIMER_W, PLANT_X } from '../src/layout';
 
 const day = (y: number, m: number, d: number) => new Date(y, m - 1, d, 9, 0, 0);
 
@@ -86,12 +86,80 @@ describe('voice commands', () => {
     expect(s.habit.mode).toBe('morning');
     expect(s.cards.some(c => c.title === 'Pick the one thing that matters')).toBe(true);
   });
+  it('acts on the desk from speech and leaves ordinary speech as a card', () => {
+    const s = S.createInitialState();
+    const spec = s.cards.find(c => c.title === 'Write spec draft')!;
+    const review = s.cards.find(c => c.title === 'Review pull request')!;
+    const parked = S.runAgent(s, 'leave Write spec draft on the desk');
+    expect(parked.kind).toBe('park');
+    expect(spec.parked).toBe(0);
+    const focus = S.runAgent(s, 'start focus', day(2026, 11, 7), 5000);
+    expect(focus.kind).toBe('focus');
+    expect(focus.reply).toContain('Write spec draft');
+    expect(s.timer.running).toBe(true);
+    expect(s.focusId).toBe(spec.id);
+    const finished = S.runAgent(s, 'finish Review pull request', day(2026, 11, 7));
+    expect(finished.kind).toBe('done');
+    expect(review.column).toBe('done');
+    expect(S.todayRecord(s.habit, day(2026, 11, 7)).completed).toBe(1);
+    S.parkCard(s, s.cards.find(c => c.title === 'Reply to emails')!.id, 1);
+    const status = S.runAgent(s, "what's on my desk");
+    expect(status.kind).toBe('status');
+    expect(status.reply).toContain('Reply to emails');
+    expect(status.reply).toContain('Write spec draft');
+    const before = s.cards.length;
+    expect(S.runAgent(s, 'park the budget review').reply).toBe('I can’t see that task');
+    expect(s.cards).toHaveLength(before);
+    expect(S.runAgent(s, 'wind down', day(2026, 11, 7)).kind).toBe('winddown');
+    expect(S.runAgent(s, 'mark the day reviewed', day(2026, 11, 7)).kind).toBe('reviewed');
+    expect(s.habit.mode).toBe('work');
+  });
   it('dictates other speech into a card and note-prefixed speech into a note', () => {
     const s = S.createInitialState();
     expect(S.applyTranscript(s, 'Email the venue about chairs')).toBe('card');
     expect(s.cards.some(c => c.title === 'Email the venue about chairs')).toBe(true);
     expect(S.applyTranscript(s, 'note: remember the long caption about the plant on the desk')).toBe('note');
     expect(s.notes.at(-1)?.text.startsWith('remember the long caption')).toBe(true);
+  });
+});
+
+describe('dependability', () => {
+  it('runs focus into a break and the break back into focus', () => {
+    const s = S.createInitialState();
+    const card = s.cards[0];
+    S.parkCard(s, card.id, 1);
+    s.focusId = card.id;
+    S.startTimer(s.timer, 0);
+    expect(S.tickTimer(s.timer, S.FOCUS_MS)).toBe(true);
+    expect(s.timer.mode).toBe('break');
+    expect(s.timer.completed).toBe(1);
+    expect(S.takeParkedFocus(s, day(2026, 11, 7))).toBe(true);
+    expect(card.column).toBe('done');
+    expect(card.parked).toBeNull();
+    S.startTimer(s.timer, S.FOCUS_MS);
+    expect(S.tickTimer(s.timer, S.FOCUS_MS + S.BREAK_MS)).toBe(true);
+    expect(s.timer.mode).toBe('focus');
+    expect(s.timer.running).toBe(false);
+  });
+  it('restores a deleted card and a pinned note after undo', () => {
+    const s = S.createInitialState();
+    const before = S.captureBoard(s);
+    const card = s.cards[0];
+    S.deleteCard(s, card.id);
+    const note = S.addNote(s, [0.3, 0.05, 0.02], 'beside the board');
+    S.setNote(s, note.id, [0.3, 0.05, 0.02], true);
+    S.restoreBoard(s, before);
+    expect(s.cards.some(c => c.id === card.id)).toBe(true);
+    expect(s.notes.some(n => n.text === 'beside the board')).toBe(false);
+    const kv = { m: new Map<string, string>(), getItem: (k: string) => kv.m.get(k) ?? null, setItem: (k: string, v: string) => void kv.m.set(k, v) };
+    const again = S.createInitialState();
+    const kept = S.addNote(again, [0.3, 0.05, 0.02], 'still here');
+    S.setNote(again, kept.id, [0.3, 0.05, 0.02], true);
+    S.save(again, kv, 0);
+    const loaded = S.load(kv);
+    expect(loaded.notes[0].pinned).toBe(true);
+    expect(loaded.notes[0].text).toBe('still here');
+    expect(loaded.notes[0].pos[0]).toBeCloseTo(0.3);
   });
 });
 
@@ -107,14 +175,21 @@ describe('accessibility and tutorial', () => {
     const s = S.createInitialState();
     const payoff = S.finishTutorial(s, 42_000, day(2026, 11, 7));
     expect(payoff.fast).toBe(true);
-    expect(payoff.message).toBe('Ready in 42s');
+    expect(payoff.message).toBe("You're set up");
     expect(s.onboarded).toBe(true);
     expect(s.habit.streak).toBe(1);
     expect(S.tutorialPayoff(75_000).fast).toBe(false);
+    expect(S.tutorialPayoff(75_000).message).toBe('Lesson complete');
   });
-  it('keeps the main panels inside the 30 degree cone and round-trips new settings', () => {
-    expect(fitsComfort(0, BOARD_W / 2, BOARD_Z)).toBe(true);
+  it('keeps the timer, dock and stands inside the 30 degree cone and round-trips new settings', () => {
+    expect(BOARD_W).toBeCloseTo(0.72, 2);
+    expect(BOARD_H).toBeCloseTo(0.51, 2);
     expect(fitsComfort(0, DOCK_HALF, DOCK_Z)).toBe(true);
+    const tan = Math.tan((52 * Math.PI) / 360);
+    const ndcY = (worldY: number, worldZ: number) => ((worldY - 1.2) / (DESKTOP_CAM_Z - worldZ)) / tan;
+    const wsY = 1.2 - 0.02, wsZ = -0.55;
+    expect(ndcY(wsY + TIMER_Y + TIMER_H / 2, wsZ + TIMER_Z)).toBeLessThan(0.92);
+    expect(ndcY(wsY + DOCK_Y - 0.082, wsZ + DOCK_Z)).toBeGreaterThan(-0.92);
     expect(fitsComfort(0, TIMER_W / 2, TIMER_Z)).toBe(true);
     expect(fitsComfort(PLANT_X, 0.03, TIMER_Z)).toBe(true);
     expect(TIMER_Y - TIMER_H / 2).toBeGreaterThan(BOARD_H / 2);
@@ -123,15 +198,58 @@ describe('accessibility and tutorial', () => {
     const kv = { m: new Map<string, string>(), getItem: (k: string) => kv.m.get(k) ?? null, setItem: (k: string, v: string) => void kv.m.set(k, v) };
     const s = S.createInitialState();
     s.a11y.highContrast = true; s.a11y.largeTargets = true; s.a11y.lookHold = true; s.mrPreferred = false;
-    s.placement = { position: [1, 2, 3], quaternion: [0, 0, 0, 1], anchorId: 'anchor-1' };
+    s.placement = { position: [1, 2, 3], quaternion: [0, 0, 0, 1], anchorId: 'anchor-1', surface: 'desk' };
     S.save(s, kv, 0);
     const loaded = S.load(kv);
     expect(loaded.a11y.highContrast).toBe(true);
     expect(loaded.a11y.lookHold).toBe(true);
     expect(loaded.placement?.anchorId).toBe('anchor-1');
+    expect(loaded.placement?.surface).toBe('desk');
     expect(loaded.mrPreferred).toBe(false);
     expect(S.surfaceKind(0.9)).toBe('desk');
     expect(S.surfaceKind(0.1)).toBe('wall');
+  });
+  it('parks one task on a free desk stand and leaves the column', () => {
+    const s = S.createInitialState();
+    const card = S.cardsIn(s, 'todo')[0];
+    expect(S.nearestDeskSlot(0, -0.15, 0.15)).toBe(1);
+    expect(S.nearestDeskSlot(0, 0.2, -0.02)).toBe(-1);
+    expect(S.parkCard(s, card.id, 1)).toBe(1);
+    expect(S.cardsIn(s, 'todo').some(c => c.id === card.id)).toBe(false);
+    expect(S.singleParked(s)?.id).toBe(card.id);
+    const other = S.cardsIn(s, 'todo')[0];
+    expect(S.parkCard(s, other.id, 1)).toBe(-1);
+    expect(S.parkCard(s, other.id, 0)).toBe(0);
+    expect(S.singleParked(s)).toBeNull();
+    for (const slot of S.DESK_SLOTS) expect(fitsComfort(slot.x, 0.071, slot.z)).toBe(true);
+  });
+  it('finishes the one task left on the desk when focus ends', () => {
+    const s = S.createInitialState();
+    const card = s.cards[0];
+    S.parkCard(s, card.id, 0);
+    s.focusId = card.id;
+    expect(S.takeParkedFocus(s, day(2026, 11, 7))).toBe(true);
+    expect(card.column).toBe('done');
+    expect(card.parked).toBeNull();
+    expect(s.focusId).toBeNull();
+    expect(S.todayRecord(s.habit, day(2026, 11, 7)).completed).toBe(1);
+    expect(S.takeParkedFocus(s, day(2026, 11, 7))).toBe(false);
+  });
+  it('remembers a parked task and drops a bad stand index', () => {
+    const kv = { m: new Map<string, string>(), getItem: (k: string) => kv.m.get(k) ?? null, setItem: (k: string, v: string) => void kv.m.set(k, v) };
+    const s = S.createInitialState();
+    const card = s.cards[0];
+    S.parkCard(s, card.id, 2);
+    s.focusId = card.id;
+    S.save(s, kv, 0);
+    const raw = JSON.parse(kv.getItem(S.STORAGE_KEY)!);
+    raw.cards[1].parked = 9;
+    kv.setItem(S.STORAGE_KEY, JSON.stringify(raw));
+    const loaded = S.load(kv);
+    expect(loaded.cards.find(c => c.id === card.id)?.parked).toBe(2);
+    expect(loaded.cards[1].parked).toBeNull();
+    expect(loaded.focusId).toBe(card.id);
+    expect(S.cardsIn(loaded, 'todo').some(c => c.id === card.id)).toBe(false);
   });
   it('fills defaults when an older save has no habit or accessibility fields', () => {
     const kv = { m: new Map<string, string>(), getItem: (k: string) => kv.m.get(k) ?? null, setItem: (k: string, v: string) => void kv.m.set(k, v) };
@@ -143,8 +261,47 @@ describe('accessibility and tutorial', () => {
     const loaded = S.load(kv);
     expect(loaded.cards).toHaveLength(3);
     expect(loaded.a11y.highContrast).toBe(false);
+    expect(loaded.a11y.showFps).toBe(false);
     expect(loaded.a11y.aiPlanner).toBe(false);
     expect(loaded.habit.history).toEqual([]);
     expect(loaded.mrPreferred).toBe(true);
+  });
+  it('holds a pinch across the gap between start and release', () => {
+    expect(S.PINCH_START).toBeLessThan(S.PINCH_RELEASE);
+    expect(S.pinchHeld(0.03, false)).toBe(false);
+    expect(S.pinchHeld(0.03, true)).toBe(true);
+    expect(S.pinchHeld(0.015, false)).toBe(true);
+    expect(S.pinchHeld(0.04, true)).toBe(false);
+  });
+  it('points the stand normal along the same tilt as the ring', () => {
+    const n = S.deskFaceNormal();
+    expect(n.x).toBe(0);
+    expect(n.y).toBeCloseTo(-Math.sin(S.DESK_TILT));
+    expect(n.z).toBeCloseTo(Math.cos(S.DESK_TILT));
+    expect(n.y * n.y + n.z * n.z).toBeCloseTo(1);
+  });
+  it('pages a full column instead of drawing every card', () => {
+    const win = S.columnWindow(10, 0, COLUMN_PAGE);
+    expect(win.visible).toBe(COLUMN_PAGE);
+    expect(win.hidden).toBe(7);
+    for (let i = 0; i < win.visible; i++) {
+      const bottom = CARD_TOP - i * CARD_SP - CARD_H / 2;
+      expect(bottom).toBeGreaterThan(-BOARD_H / 2);
+    }
+    const blockers = S.COLUMNS.flatMap((_, col) => Array.from({ length: COLUMN_PAGE }, (__, i) => ({
+      x: (col - 1) * COL_W, y: CARD_TOP - i * CARD_SP, w: CARD_W, h: CARD_H,
+    })));
+    const spot = S.noteSpot(BOARD_W, BOARD_H, { w: 0.13, h: 0.12 }, blockers, 0);
+    expect(spot).not.toBeNull();
+    const note = { x: spot!.x, y: spot!.y, w: 0.13, h: 0.12 };
+    for (const card of blockers) expect(S.rectsOverlap(note, card)).toBe(false);
+    expect(Math.abs(note.y) + note.h / 2).toBeLessThan(BOARD_H / 2);
+  });
+  it('opens the palm test when the palm faces the viewer', () => {
+    const wrist = { x: 0, y: 0, z: 0 };
+    const indexMeta = { x: 0.04, y: 0, z: -0.06 };
+    const pinkyMeta = { x: -0.04, y: 0, z: -0.06 };
+    expect(S.palmFacesViewer(wrist, indexMeta, pinkyMeta, { x: 0, y: -1, z: 0 })).toBe(true);
+    expect(S.palmFacesViewer(wrist, indexMeta, pinkyMeta, { x: 0, y: 1, z: 0 })).toBe(false);
   });
 });

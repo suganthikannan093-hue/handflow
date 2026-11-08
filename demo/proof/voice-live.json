@@ -1,0 +1,10 @@
+{
+  "date": "2026-11-08",
+  "endpoint": "https://handflow-voice.adeptacorn256.chatgpt.site/api/transcribe",
+  "input": "voice-input.wav",
+  "inputDisclosure": "Synthesized test phrase, not live microphone speech",
+  "response": {
+    "text": "Draft the opening slide.",
+    "provider": "OpenAI"
+  }
+}
