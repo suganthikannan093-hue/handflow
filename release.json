@@ -9,8 +9,8 @@
     "timer reload continuity",
     "accessible desk controls"
   ],
-  "unitTests": 43,
+  "unitTests": 44,
   "browserScenarios": 7,
   "physicalQuestVerified": false,
-  "sourceCommit": "fa24794ad52e047e621ee9daf0dee47bcc65a27f"
+  "sourceCommit": "1131cf796f998a76fdf0b4cdcd899af9258ab840"
 }
