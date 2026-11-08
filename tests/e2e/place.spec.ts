@@ -39,6 +39,11 @@ test('passthrough places the board on a desk, anchors it, and a long note fits',
     return { seq, xr };
   });
   expect(placed.xr, JSON.stringify(placed)).toMatchObject({ surface: 'desk', placing: false });
+  const layout = await page.evaluate(() => (window as any).handflow.deskLayoutProof());
+  expect(layout.toolbarY - 0.031).toBeGreaterThan(layout.tabletopY);
+  expect(layout.trashY - 0.02).toBeGreaterThan(layout.tabletopY);
+  expect(layout.standsY.every((y: number) => y - 0.03 > layout.tabletopY)).toBe(true);
+
   try {
     await page.waitForFunction(() => {
       const xr = (window as unknown as { handflow: { xr: () => { surface: string | null; anchorId: string | null; placing: boolean; clear: boolean } } }).handflow.xr();

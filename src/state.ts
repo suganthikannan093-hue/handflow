@@ -29,9 +29,9 @@ export interface WorkspaceState {
 }
 /** Three stands in front of the board, inside the 30° cone. A task left here stays across sessions. */
 export const DESK_SLOTS = [
-  { x: -0.12, y: -0.15, z: 0.15 },
-  { x: 0, y: -0.15, z: 0.15 },
-  { x: 0.12, y: -0.15, z: 0.15 },
+  { x: -0.12, y: -0.18, z: 0.15 },
+  { x: 0, y: -0.18, z: 0.15 },
+  { x: 0.12, y: -0.18, z: 0.15 },
 ] as const;
 export const DESK_SLOT_REACH = 0.07;
 /** Slot rings and parked cards use this rotation.x. */

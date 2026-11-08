@@ -319,7 +319,7 @@ function refreshPlant() {
 }
 
 // Focus has a spatial consequence: the backlog fades while the desk stays within reach.
-const focusCue = new Panel(0.56, 0.055, 1400, (g, W, H) => {
+const focusCue = new Panel(0.56, 0.04, 1400, (g, W, H) => {
   const task = state.cards.find(c => c.id === state.focusId) ?? S.singleParked(state);
   const running = state.timer.running && state.timer.mode === 'focus';
   const cue = task?.nextStep ? `Next: ${task.nextStep}` : running ? 'One thing. Right here. Let the rest wait.' : task ? 'Ready when you are · Start focus' : 'Leave one task on your desk';
@@ -327,13 +327,14 @@ const focusCue = new Panel(0.56, 0.055, 1400, (g, W, H) => {
   g.font = `650 ${H * 0.36}px system-ui`;
   text(g, ellipsize(g, cue, W - 32), W / 2, H / 2, H * 0.36, '#b6f1cf', 650, 'center');
 });
-focusCue.position.set(0, -0.225, 0.12); focusCue.rotation.x = S.DESK_TILT; ws.add(focusCue);
+focusCue.position.set(0, 0.125, 0.016); boardPlane.add(focusCue); focusCue.visible = false;
 let lastFocusSignature = '';
 function updateQuietFocus() {
   const quiet = state.onboarded && state.timer.running && state.timer.mode === 'focus' && state.cards.some(c => c.id === state.focusId && c.column !== 'done');
-  const signature = `${quiet}:${state.focusId}:${state.cards.find(c => c.id === state.focusId)?.nextStep || ''}`;
+  const signature = `${quiet}:${state.onboarded}:${state.habit.mode}:${voicePanel.visible}:${state.focusId}:${state.cards.find(c => c.id === state.focusId)?.nextStep || ''}`;
   if (signature === lastFocusSignature) return;
   lastFocusSignature = signature;
+  focusCue.visible = state.onboarded && state.habit.mode === 'work' && !voicePanel.visible;
   board.material.opacity = quiet ? 0.22 : 1;
   for (const it of cardMeshes.values()) it.panel.material.opacity = quiet && it.obj.parent === boardPlane ? 0.22 : 1;
   for (const it of noteMeshes.values()) it.panel.material.opacity = quiet ? 0.28 : 1;
@@ -504,7 +505,15 @@ function updateDragHint() {
   dragHint.visible = true;
   if (word !== dragWord) { dragWord = word; dragHint.redraw(); }
 }
-function syncPlaceChrome() { deskMat.visible = state.placement?.surface === 'desk'; board.redraw(); }
+function syncPlaceChrome() {
+  const desk = state.placement?.surface === 'desk';
+  deskMat.visible = desk;
+  // Keep controls above the detected tabletop. Trash/undo flank the main row.
+  dock.position.y = desk ? -0.127 : DOCK_Y;
+  trashP.position.set(desk ? -0.37 : -0.06, desk ? 0 : -0.062, 0);
+  items.find(it => it.name === 'button:undo')?.obj.position.set(desk ? 0.33 : 0.12, desk ? 0 : -0.062, 0);
+  board.redraw();
+}
 const gazeDot = new THREE.Mesh(new THREE.RingGeometry(0.0035, 0.0065, 18), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false }));
 gazeDot.visible = false; gazeDot.renderOrder = 20; scene.add(gazeDot);
 const gazeDir = new THREE.Vector3();
@@ -1223,7 +1232,7 @@ function registerEmulator() {
   });
 }
 
-layoutCards(false); syncNotes(); refreshPlant(); refreshMode(); applyA11y(); registerEmulator(); paintSlots(-1);
+layoutCards(false); syncNotes(); refreshPlant(); refreshMode(); applyA11y(); registerEmulator(); paintSlots(-1); syncPlaceChrome();
 function greetDesk() {
   const waiting = S.parkedCards(state);
   if (!state.onboarded || !waiting.length || state.habit.mode !== 'work') return;
@@ -1280,7 +1289,7 @@ function applySaid(said: string) {
   if (act.kind === 'park') advanceTutorial('park');
 }
 (window as unknown as { handflow?: unknown }).handflow = {
-  state, recenter, screenOf, focusProof: () => ({ quiet: board.material.opacity < 1, plantProgress: plant.focus, plantStage: plant.stage }), voiceProof: () => ({ endpoint: cloudEndpoint, pending: pendingVoice, message: voiceMessage }), fps: () => fpsValue, refresh: () => { refreshMode(); applyA11y(); },
+  state, recenter, screenOf, deskLayoutProof: () => ({ surface: state.placement?.surface, toolbarY: dock.position.y, tabletopY: -0.22, trashY: dock.position.y + trashP.position.y, standsY: S.DESK_SLOTS.map(s => s.y) }), focusProof: () => ({ quiet: board.material.opacity < 1, plantProgress: plant.focus, plantStage: plant.stage }), voiceProof: () => ({ endpoint: cloudEndpoint, pending: pendingVoice, message: voiceMessage }), fps: () => fpsValue, refresh: () => { refreshMode(); applyA11y(); },
   dictate: (text: string) => applySaid(text),
   holdMenu: (on: boolean) => { menuHold = on; },
   menuOpen: () => handMenu.visible,
