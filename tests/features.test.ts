@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as S from '../src/state';
-import { fitsComfort, BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COACH_H, COACH_Y, COL_W, COLUMN_PAGE, DESKTOP_CAM_Y, DESKTOP_FOV, DESKTOP_WS_Z, DOCK_X, DOCK_Y, DOCK_Z, DOCK_HALF, DUR_GAP, DUR_H, DUR_W, DUR_Y, EYE, EYE_DROP, MORE_H, MORE_Y, SKIP_TUT_H, SKIP_TUT_W, SUPPORT_CLEARANCE, TIMER_BTN_H, TIMER_BTN_Y, TIMER_H, TIMER_Y, TIMER_Z, TIMER_W, TOAST_H, TOAST_Y, PLANT_X, WORKSPACE_LOWEST, XR_DROP, boardSpanAt, desktopCameraDistance, panelYFromCanvas, poseLooksUntracked, projectFromHead, workspaceLocalToWorld, workspacePoseFromHead } from '../src/layout';
+import { fitsComfort, BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COACH_H, COACH_Y, COL_W, COLUMN_PAGE, DESKTOP_CAM_Y, DESKTOP_FOV, DESKTOP_WS_Z, DOCK_X, DOCK_Y, DOCK_Z, DOCK_HALF, DUR_GAP, DUR_H, DUR_W, DUR_Y, EYE, EYE_DROP, MORE_H, MORE_Y, SKIP_TUT_H, SKIP_TUT_W, SUPPORT_CLEARANCE, TIMER_BTN_H, TIMER_BTN_Y, TIMER_H, TIMER_Y, TIMER_Z, TIMER_W, TOAST_H, TOAST_Y, PLANT_X, PLANT_Y, PLANT_GAP, plantLocalX, WORKSPACE_LOWEST, XR_DROP, XR_DIST_MIN, XR_DIST_MAX, MAX_ENTRY_PITCH_DEG, SEATED_LOOK_DOWN, boardSpanAt, desktopCameraDistance, lookPitchDeg, seatedLookDirection, panelYFromCanvas, poseLooksUntracked, projectFromHead, workspaceLocalToWorld, workspacePoseFromHead } from '../src/layout';
 
 const day = (y: number, m: number, d: number) => new Date(y, m - 1, d, 9, 0, 0);
 
@@ -186,18 +186,25 @@ describe('accessibility and tutorial', () => {
     expect(BOARD_H).toBeCloseTo(0.51, 2);
     expect(fitsComfort(0, DOCK_HALF, DOCK_Z)).toBe(true);
     const vTan = Math.tan((DESKTOP_FOV * Math.PI) / 360);
-    const aspect = 1280 / 800;
-    const camZ = (DESKTOP_WS_Z + BOARD_Z) + desktopCameraDistance(aspect);
-    const ndcY = (worldY: number, worldZ: number) => ((worldY - DESKTOP_CAM_Y) / (camZ - worldZ)) / vTan;
-    const wsY = DESKTOP_CAM_Y - EYE_DROP, wsZ = DESKTOP_WS_Z;
-    expect(ndcY(wsY + TIMER_Y + TIMER_H / 2, wsZ + TIMER_Z)).toBeLessThan(0.92);
-    expect(ndcY(wsY + DOCK_Y - 0.082, wsZ + DOCK_Z)).toBeGreaterThan(-0.92);
-    expect(ndcY(wsY + COACH_Y + COACH_H / 2, wsZ + TIMER_Z)).toBeLessThan(0.92);
+    const checkDesktop = (aspect: number) => {
+      const camZ = (DESKTOP_WS_Z + BOARD_Z) + desktopCameraDistance(aspect);
+      const ndcY = (worldY: number, worldZ: number) => ((worldY - DESKTOP_CAM_Y) / (camZ - worldZ)) / vTan;
+      const wsY = DESKTOP_CAM_Y - EYE_DROP, wsZ = DESKTOP_WS_Z;
+      expect(ndcY(wsY + TIMER_Y + TIMER_H / 2, wsZ + TIMER_Z), 'timer ' + aspect).toBeLessThan(0.92);
+      expect(ndcY(wsY + DOCK_Y - 0.082, wsZ + DOCK_Z), 'dock ' + aspect).toBeGreaterThan(-0.92);
+      expect(ndcY(wsY + COACH_Y + COACH_H / 2, wsZ + TIMER_Z), 'coach ' + aspect).toBeLessThan(0.92);
+    };
+    checkDesktop(1280 / 800);
+    // Headed Chrome inner size at a 1280x800 window with browser chrome.
+    checkDesktop(1280 / 700);
     expect(fitsComfort(0, TIMER_W / 2, TIMER_Z)).toBe(true);
     expect(fitsComfort(PLANT_X, 0.03, TIMER_Z)).toBe(true);
     expect(TIMER_Y - TIMER_H / 2).toBeGreaterThan(BOARD_H / 2);
     expect(DOCK_Y + 0.04).toBeLessThan(-BOARD_H / 2);
     expect(Math.abs(PLANT_X) - 0.03).toBeGreaterThan(TIMER_W / 2);
+    expect(PLANT_X).toBeGreaterThan(BOARD_W / 2 + 0.05);
+    expect(plantLocalX(2)).toBeGreaterThan(BOARD_W + PLANT_GAP - 1e-6);
+    expect(PLANT_Y).toBeLessThan(0);
     const kv = { m: new Map<string, string>(), getItem: (k: string) => kv.m.get(k) ?? null, setItem: (k: string, v: string) => void kv.m.set(k, v) };
     const s = S.createInitialState();
     s.a11y.highContrast = true; s.a11y.largeTargets = true; s.a11y.lookHold = true; s.mrPreferred = false;
@@ -431,48 +438,64 @@ describe('review fixes', () => {
     };
     const head = { x: 0, y: 1.15, z: 0 };
     const down = { x: 0.30, y: -0.58, z: -0.76 };
-    const seated = content(head, down);
+    const ahead = { x: 0, y: 0, z: -1 };
+    const comfort = seatedLookDirection();
+    expect(lookPitchDeg(comfort)).toBeLessThanOrEqual(MAX_ENTRY_PITCH_DEG);
+    expect(lookPitchDeg(comfort)).toBeGreaterThan(8);
+    expect(SEATED_LOOK_DOWN).toBeCloseTo(0.18);
+    // Placement ignores pitch: a 35° IWER look-down keeps the same height and distance as a level look.
+    const levelPose = workspacePoseFromHead(head, ahead);
+    const downPose = workspacePoseFromHead(head, down);
+    expect(downPose.dist).toBeCloseTo(levelPose.dist);
+    expect(downPose.drop).toBeCloseTo(levelPose.drop);
+    expect(downPose.position.y).toBeCloseTo(levelPose.position.y);
+    expect(levelPose.dist).toBeGreaterThanOrEqual(XR_DIST_MIN);
+    expect(levelPose.dist).toBeLessThanOrEqual(XR_DIST_MAX);
+    const seated = content(head, comfort);
     expect(seated.header.inView, JSON.stringify(seated.header)).toBe(true);
     expect(seated.timerTop.inView, JSON.stringify(seated.timerTop)).toBe(true);
-    expect(Math.abs(seated.header.ndcY)).toBeLessThanOrEqual(1);
-    expect(Math.abs(seated.timerTop.ndcY)).toBeLessThanOrEqual(1);
-    const ahead = { x: 0, y: 0, z: -1 };
+    expect(Math.abs(seated.header.ndcY)).toBeLessThan(0.85);
+    expect(Math.abs(seated.timerTop.ndcY)).toBeLessThan(0.85);
+    const handle = workspaceLocalToWorld(seated.seated, { x: 0, y: -0.26, z: 0.16 });
+    const carry = workspaceLocalToWorld(seated.seated, { x: -0.20, y: DOCK_Y - 0.062, z: DOCK_Z });
+    expect(projectFromHead(head, comfort, handle).inView, 'handle').toBe(true);
+    expect(projectFromHead(head, comfort, carry).inView, 'carry').toBe(true);
     const flat = content(head, ahead);
     expect(flat.seated.drop).toBeCloseTo(XR_DROP);
     expect(flat.header.inView).toBe(true);
     expect(flat.timerTop.inView).toBe(true);
     expect(Math.abs(flat.timerTop.ndcY)).toBeLessThan(1);
-    // A steeper desk look, like IWER sitting over a lower table, must still keep both in a 90° FOV.
-    const steep = content(head, { x: 0.2, y: -0.75, z: -0.63 });
-    expect(steep.header.inView, JSON.stringify(steep.header)).toBe(true);
-    expect(steep.timerTop.inView, JSON.stringify(steep.timerTop)).toBe(true);
     // Yaw-only placement keeps the board centred even when the user looks down and to the side.
+    const sideDown = content(head, down);
     expect(Math.abs(seated.board.ndcX)).toBeLessThan(0.05);
-    expect(Math.abs(steep.board.ndcX)).toBeLessThan(0.05);
+    expect(Math.abs(sideDown.board.ndcX)).toBeLessThan(0.05);
     expect(Math.abs(flat.board.ndcX)).toBeLessThan(0.05);
-    // A desk in front of a seated user: sit just in front of the near edge, or above the tabletop.
+    // A desk in front: keep the comfortable 0.85-0.95 m distance and clear the tabletop with the board underside.
     const desk = workspacePoseFromHead(head, ahead, EYE, XR_DROP, { height: 0.73, front: 0.62 });
-    const inFront = desk.dist <= 0.62 - 0.04;
-    const above = desk.position.y + WORKSPACE_LOWEST >= 0.73 + SUPPORT_CLEARANCE - 1e-6;
-    expect(inFront || above, JSON.stringify(desk)).toBe(true);
-    if (inFront) expect(desk.dist).toBeLessThan(0.85);
+    expect(desk.dist).toBeGreaterThanOrEqual(XR_DIST_MIN);
+    expect(desk.dist).toBeLessThanOrEqual(XR_DIST_MAX);
+    expect(desk.position.y - BOARD_H / 2).toBeGreaterThanOrEqual(0.73 + 0.02 - 1e-6);
     expect(desk.position.x).toBeCloseTo(0);
-    // IWER home-office desk sits ~0.38 m ahead. Hang in front of the edge so a
-    // downward look can keep the timer in view without cutting through the top.
-    const close = workspacePoseFromHead(head, down, EYE, XR_DROP, { height: 0.74, front: 0.38 });
-    expect(close.dist, JSON.stringify(close)).toBeLessThanOrEqual(0.38 - 0.04);
-    expect(close.dist).toBeGreaterThanOrEqual(0.28);
-    expect(close.position.x).toBeCloseTo(head.x + close.dist * (down.x / Math.hypot(down.x, down.z)));
+    // IWER home-office desk sits ~0.38 m ahead. Do not pull in to 0.28 m.
+    const close = workspacePoseFromHead(head, comfort, EYE, XR_DROP, { height: 0.74, front: 0.38 });
+    expect(close.dist, JSON.stringify(close)).toBeGreaterThanOrEqual(XR_DIST_MIN);
+    expect(close.dist).toBeLessThanOrEqual(XR_DIST_MAX);
+    expect(close.drop).toBeGreaterThanOrEqual(0.12);
+    expect(close.drop).toBeLessThanOrEqual(0.25);
+    expect(close.position.y - BOARD_H / 2).toBeGreaterThanOrEqual(0.74 + 0.02 - 1e-6);
     const closeHeader = workspaceLocalToWorld(close, { x: 0, y: BOARD_H / 2, z: BOARD_Z });
     const closeTimer = workspaceLocalToWorld(close, { x: 0, y: TIMER_Y + TIMER_H / 2, z: TIMER_Z });
     const closeBoard = workspaceLocalToWorld(close, { x: 0, y: 0, z: BOARD_Z });
-    expect(projectFromHead(head, down, closeHeader).inView).toBe(true);
-    expect(projectFromHead(head, down, closeTimer).inView).toBe(true);
-    expect(Math.abs(projectFromHead(head, down, closeBoard).ndcX)).toBeLessThan(0.05);
+    const closeHandle = workspaceLocalToWorld(close, { x: 0, y: -0.18, z: 0.16 });
+    expect(projectFromHead(head, comfort, closeHeader).inView).toBe(true);
+    expect(projectFromHead(head, comfort, closeTimer).inView).toBe(true);
+    expect(Math.abs(projectFromHead(head, comfort, closeTimer).ndcY)).toBeLessThan(0.92);
+    expect(Math.abs(projectFromHead(head, comfort, closeBoard).ndcX)).toBeLessThan(0.05);
+    expect(projectFromHead(head, comfort, closeHandle).inView).toBe(true);
+    // A grazing/side plane is still ignored so we do not raise the board to the eyes.
     const glance = workspacePoseFromHead(head, down, EYE, XR_DROP, { height: 0.74, front: 0.15 });
-    const glanceTimer = workspaceLocalToWorld(glance, { x: 0, y: TIMER_Y + TIMER_H / 2, z: TIMER_Z });
-    expect(projectFromHead(head, down, glanceTimer).inView, JSON.stringify(glance)).toBe(true);
-    expect(glance.dist).toBeGreaterThanOrEqual(0.85);
+    expect(glance.dist).toBeGreaterThanOrEqual(XR_DIST_MIN);
+    expect(glance.drop).toBeCloseTo(XR_DROP);
   });
 
   it('does not restore a stale running break, but keeps a live focus and settles an expired one first', () => {
