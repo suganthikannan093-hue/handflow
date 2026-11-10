@@ -11,6 +11,5 @@
   ],
   "unitTests": 44,
   "browserScenarios": 7,
-  "physicalQuestVerified": false,
-  "sourceCommit": "1131cf796f998a76fdf0b4cdcd899af9258ab840"
+  "physicalQuestVerified": false
 }
