@@ -6,7 +6,7 @@ export interface CompanionActions {
   park: (id: string) => void;
   remove: (id: string) => void;
   timer: () => void; undo: () => void; mic: () => void; acceptVoice: () => void;
-  setting: (key: 'highContrast' | 'largeTargets' | 'lookHold') => void;
+  setting: (key: 'highContrast' | 'largeTargets' | 'lookHold' | 'compactBoard') => void;
 }
 export function mountCompanion(state: S.WorkspaceState, actions: CompanionActions) {
   const drawer = document.getElementById('companion') as HTMLDialogElement;
@@ -30,17 +30,22 @@ export function mountCompanion(state: S.WorkspaceState, actions: CompanionAction
   for (const key of ['highContrast', 'largeTargets', 'lookHold'] as const) {
     document.getElementById(`setting-${key}`)!.addEventListener('change', () => actions.setting(key));
   }
+  document.getElementById('setting-compactBoard')!.addEventListener('change', () => actions.setting('compactBoard'));
   const makeButton = (label: string, action: () => void) => {
     const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.onclick = () => { action(); render(); }; return b;
   };
   function render() {
+    const banner = document.getElementById('left-off-banner');
+    const greet = S.leftOffGreeting(state) || (state.carryOver ? `Where you left off: ${state.carryOver.taskTitle}${state.carryOver.note ? ` · ${state.carryOver.note}` : ''}` : '');
+    if (banner) { banner.hidden = !greet; banner.textContent = greet; }
     const task = state.cards.find(c => c.id === state.focusId) ?? S.singleParked(state);
-    summary.textContent = task ? `On your desk: ${task.title}${task.nextStep ? `. Next step: ${task.nextStep}` : ''}` : 'Place one open task on a stand to focus on it.';
+    summary.textContent = task ? `On your desk: ${task.title}${task.nextStep ? `. Next step: ${task.nextStep}` : ''}` : 'Place one open task on a stand to focus on it. Voice is never required.';
     const duration = document.getElementById('focus-duration') as HTMLSelectElement;
     duration.disabled = state.timer.running;
     if (state.timer.mode === 'focus') duration.value = String(state.timer.durationMs / 60000);
     document.getElementById('desk-timer')!.textContent = state.timer.running ? 'Pause focus' : 'Start focus';
     for (const key of ['highContrast', 'largeTargets', 'lookHold'] as const) (document.getElementById(`setting-${key}`) as HTMLInputElement).checked = state.a11y[key];
+    (document.getElementById('setting-compactBoard') as HTMLInputElement).checked = state.compactBoard;
     if (!drawer.open) return;
     const focused = document.activeElement as HTMLElement | null;
     const focusKey = focused?.dataset.focusKey;

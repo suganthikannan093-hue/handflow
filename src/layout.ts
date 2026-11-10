@@ -5,9 +5,18 @@
 //
 // The board itself is about 1.5× the old 0.48 × 0.34 m panel so titles and
 // the timer words fit. At 0.50 m that was wider than the 30° cone; at EYE
-// (1.0 m) the board and the raised timer both fit a typical 90° vertical FOV.
+// (0.9 m) the board and the raised timer both fit a typical 90° vertical FOV
+// and the board spans about half of a headset-width view.
 
-export const EYE = 1.0;
+export const EYE = 0.9;
+export const XR_DIST_MIN = 0.85;
+export const XR_DIST_MAX = 0.95;
+/** Closest horizontal hover allowed when hanging just in front of a desk. */
+export const XR_PULL_MIN = 0.28;
+/** Target fraction of the horizontal view the board should span. */
+export const BOARD_SPAN_TARGET = 0.5;
+export const BOARD_SPAN_MIN = 0.45;
+export const BOARD_SPAN_MAX = 0.55;
 /** Workspace origin sits this far below the eyes, so the button row stays in view. */
 export const EYE_DROP = 0.02;
 /** Level-look drop: board centre sits this far below eye height (0.15–0.25 m). */
@@ -75,6 +84,10 @@ export const DESKTOP_FOV = 52;
 export const DESKTOP_WS_Z = -0.55;
 /** Outer edge of the button row, including the plus button. */
 export const DOCK_HALF = 0.23;
+/** Lowest workspace-local Y that must stay above a detected desk (dock underside). */
+export const WORKSPACE_LOWEST = DOCK_Y - 0.08;
+/** Gap to keep between that lowest point and a support surface. */
+export const SUPPORT_CLEARANCE = 0.08;
 
 /** Cards in one column before the rest sit behind “+N more”. */
 export const COLUMN_PAGE = 3;
@@ -124,26 +137,68 @@ export function xrDropForLook(
   return drop;
 }
 
+/** A detected (or assumed) seated desk / table in front of the viewer. */
+export type SupportSurface = {
+  /** World Y of the tabletop. */
+  height: number;
+  /** Horizontal distance from the head to the near edge along floor-forward. */
+  front?: number;
+};
+
+/** Fraction of a horizontal FOV (`hTan = tan(hFov/2)`) spanned by the board at `dist`. */
+export function boardSpanAt(dist: number, hTan: number, width = BOARD_W) {
+  return width / (2 * Math.max(dist, 1e-3) * Math.max(hTan, 1e-3));
+}
+
 /**
- * Place the workspace origin `dist` metres in front of the head, facing the
- * user. The board's local +Z points back at the head. Drop follows the look
- * so the timer and headers stay in a typical 90° vertical FOV.
+ * Place the workspace origin `dist` metres in front of the head along the
+ * yaw-only forward (no lateral offset), facing the user. Drop follows the
+ * look so the timer and headers stay in a typical 90° vertical FOV. When a
+ * support surface is in the way, pull the board in front of the near edge
+ * or raise it so the dock and board stay above the tabletop.
  */
 export function workspacePoseFromHead(
   head: { x: number; y: number; z: number },
   look: { x: number; y: number; z: number },
   dist = EYE,
   drop = XR_DROP,
+  surface?: SupportSurface,
 ) {
   const dir = flattenForward(look.x, look.y, look.z);
-  const usedDrop = xrDropForLook(look, dist, drop, head.y);
+  let usedDist = Math.min(XR_DIST_MAX, Math.max(XR_DIST_MIN, dist));
+  let usedDrop = xrDropForLook(look, usedDist, drop, head.y);
+  let support = surface;
+  if (support?.front != null && usedDist > support.front - 0.08) {
+    // Prefer hanging just in front of the near edge so a downward look can
+    // keep its FOV-aware drop without going through the tabletop (or the
+    // plant / monitor on it). A nearer grazing edge (often a side plane
+    // after a turn) is ignored so we do not raise the timer out of view.
+    const ahead = support.front - 0.1;
+    if (ahead >= XR_PULL_MIN) {
+      usedDist = Math.min(usedDist, ahead);
+      usedDrop = xrDropForLook(look, usedDist, drop, head.y);
+    } else {
+      support = undefined;
+    }
+  }
+  if (support) {
+    const minY = support.height + SUPPORT_CLEARANCE;
+    const overDesk = support.front == null || usedDist > support.front - 0.04;
+    const dockFits = head.y + WORKSPACE_LOWEST - minY >= 0.05;
+    const lowest = overDesk && !dockFits ? -BOARD_H / 2 : WORKSPACE_LOWEST;
+    const plannedLowest = head.y - usedDrop + lowest;
+    if (overDesk && plannedLowest < minY) {
+      const maxDrop = head.y + lowest - minY;
+      if (maxDrop >= 0.05) usedDrop = Math.min(usedDrop, maxDrop);
+    }
+  }
   const position = {
-    x: head.x + dir.x * dist,
+    x: head.x + dir.x * usedDist,
     y: head.y - usedDrop,
-    z: head.z + dir.z * dist,
+    z: head.z + dir.z * usedDist,
   };
   const facing = flattenForward(head.x - position.x, 0, head.z - position.z);
-  return { position, facing, dist, drop: usedDrop };
+  return { position, facing, dist: usedDist, drop: usedDrop };
 }
 
 /** Map a workspace-local point into world space for a yaw-only workspace pose. */

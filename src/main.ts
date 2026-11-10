@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.js';
 import * as S from './state';
-import { BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COACH_H, COACH_W, COACH_Y, COACH_Z, COL_W, COLUMN_PAGE, DESKTOP_CAM_Y, DESKTOP_WS_Z, DOCK_Y, DOCK_Z, DUR_GAP, DUR_H, DUR_W, DUR_Y, EYE_DROP, MORE_H, MORE_W, MORE_Y, PLANT_X, PLANT_Y, PLANT_Z, SKIP_TUT_H, SKIP_TUT_W, SKIP_TUT_X, SKIP_TUT_Y, TIMER_BTN_H, TIMER_BTN_W, TIMER_BTN_Y, TIMER_H, TIMER_W, TIMER_Y, TIMER_Z, TOAST_H, TOAST_W, TOAST_Y, TOAST_Z, desktopCameraDistance, poseLooksUntracked, workspacePoseFromHead } from './layout';
+import { BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COACH_H, COACH_W, COACH_Y, COACH_Z, COL_W, COLUMN_PAGE, DESKTOP_CAM_Y, DESKTOP_WS_Z, DOCK_Y, DOCK_Z, DUR_GAP, DUR_H, DUR_W, DUR_Y, EYE_DROP, MORE_H, MORE_W, MORE_Y, PLANT_X, PLANT_Y, PLANT_Z, SKIP_TUT_H, SKIP_TUT_W, SKIP_TUT_X, SKIP_TUT_Y, TIMER_BTN_H, TIMER_BTN_W, TIMER_BTN_Y, TIMER_H, TIMER_W, TIMER_Y, TIMER_Z, TOAST_H, TOAST_W, TOAST_Y, TOAST_Z, BOARD_SPAN_TARGET, boardSpanAt, desktopCameraDistance, flattenForward, poseLooksUntracked, workspacePoseFromHead, type SupportSurface } from './layout';
 import { Panel, button, roundRect, text, hex, ellipsize, paintLines, measuredWidth } from './ui';
 import { sfx, unlockAudio, setAmbient } from './audio';
 import { Plant } from './plant';
@@ -57,7 +57,7 @@ scene.add(stars);
 
 const ws = new THREE.Group(); scene.add(ws); ws.position.set(0, DESKTOP_CAM_Y - EYE_DROP, DESKTOP_WS_Z);
 
-type Kind = 'card' | 'note' | 'button';
+type Kind = 'card' | 'note' | 'button' | 'handle';
 interface Item { obj: THREE.Object3D; kind: Kind; id?: string; name?: string; onPress?: () => void; panel: Panel; grabbable: boolean }
 const items: Item[] = [];
 const reg = (it: Item) => { items.push(it); it.obj.userData.item = it; it.obj.userData.baseScale = 1; return it; };
@@ -68,7 +68,8 @@ const bg = (alpha = 0.9) => theme.contrast ? '#05070f' : `rgba(16,20,38,${alpha}
 const board = new Panel(BOARD_W, BOARD_H, 800, (g, W, H) => {
   roundRect(g, 0, 0, W, H, 36); g.fillStyle = bg(0.92); g.fill();
   g.strokeStyle = theme.contrast ? '#ffffff' : 'rgba(160,180,255,0.55)'; g.lineWidth = theme.contrast ? 8 : 4; g.stroke();
-  const mode = state.habit.mode === 'morning' ? 'Morning' : state.habit.mode === 'winddown' ? 'Wind-down' : 'Today';
+  const carry = state.carryOver && !state.carryOver.greeted ? 'Where you left off' : state.carryOver?.taskTitle ? `Left off · ${state.carryOver.taskTitle}` : '';
+  const mode = carry || (state.habit.mode === 'morning' ? 'Morning' : state.habit.mode === 'winddown' ? 'Wind-down' : 'Today');
   const where = state.placement?.surface === 'desk' ? ' · on your desk' : state.placement?.surface === 'wall' ? ' · on your wall' : '';
   const waiting = S.parkedCards(state).length;
   const left = waiting ? ` · ${waiting} left out` : '';
@@ -134,8 +135,9 @@ function redrawCard(it: Item, card: S.Card) {
 function layoutCards(animate = true) {
   lastFocusSignature = '';
   const shown = new Set<string>();
+  const compactIds = S.compactVisibleIds(state);
   for (const col of S.COLUMNS) {
-    const list = S.cardsIn(state, col);
+    const list = compactIds ? S.cardsIn(state, col).filter(c => compactIds.has(c.id)) : S.cardsIn(state, col);
     const win = S.columnWindow(list.length, colPage[col], COLUMN_PAGE);
     colPage[col] = win.page;
     list.slice(win.start, win.start + win.visible).forEach(c => shown.add(c.id));
@@ -183,7 +185,8 @@ function layoutCards(animate = true) {
     it.obj.visible = true;
     if (held) { delete it.obj.userData.target; redrawCard(it, card); continue; }
     if (it.obj.parent !== boardPlane) { boardPlane.attach(it.obj); it.obj.rotation.set(0, 0, 0); }
-    const list = S.cardsIn(state, card.column);
+    const all = S.cardsIn(state, card.column);
+    const list = compactIds ? all.filter(c => compactIds.has(c.id)) : all;
     const win = S.columnWindow(list.length, colPage[card.column], COLUMN_PAGE);
     const i = list.findIndex(c => c.id === card.id) - win.start;
     it.obj.userData.target = new THREE.Vector3(colX(card.column), CARD_TOP - Math.max(0, i) * CARD_SP, 0.004);
@@ -339,6 +342,7 @@ const trashP = new Panel(0.16, 0.04, 900, (g, W, H, hover) => {
 trashP.position.set(-0.06, -0.062, 0); dock.add(trashP);
 mkBtn('Undo', 0.08, 0x8fb4ff, dock, [0.12, -0.062, 0], () => { undoLast(); }, '', 'button:undo');
 mkBtn('Menu', 0.068, 0xdfe6ff, dock, [0.205, -0.062, 0], () => toggleFallbackMenu(), '', 'button:menu');
+mkBtn('Carry', 0.08, 0xb6f1cf, dock, [-0.20, -0.062, 0], () => carryToTomorrow(), '', 'button:carry');
 for (const col of S.COLUMNS) {
   const item = mkBtn('+ more', MORE_W, COL_COLOR[col], boardPlane, [colX(col), MORE_Y, 0.008], () => {
     const win = S.columnWindow(S.cardsIn(state, col).length, colPage[col] + 1, COLUMN_PAGE);
@@ -346,6 +350,29 @@ for (const col of S.COLUMNS) {
   }, '', `button:more:${col}`);
   item.obj.visible = false;
   moreBtns.set(col, item);
+}
+
+let userScale = 1;
+function bumpUserScale(factor: number) {
+  userScale = Math.min(1.35, Math.max(0.85, userScale * factor));
+  ws.scale.setScalar(userScale);
+  if (state.placement) state.placement.scale = userScale;
+  persist();
+}
+const handleBar = new Panel(0.2, 0.036, 900, (g, W, H, hover) => {
+  roundRect(g, 0, 0, W, H, 14); g.fillStyle = hover ? '#3a5a8a' : '#1a2a4a'; g.fill();
+  text(g, 'Grab to place', W / 2, H / 2, H * 0.42, '#d6e6ff', 650, 'center');
+});
+handleBar.position.set(0, -0.26, 0.16); ws.add(handleBar);
+reg({ obj: handleBar, kind: 'handle', name: 'handle:move', panel: handleBar, grabbable: true });
+mkBtn('−', 0.036, 0x8fb4ff, ws, [-0.13, -0.26, 0.16], () => bumpUserScale(1 / 1.08), '', 'button:scale-down');
+mkBtn('+', 0.036, 0x8fb4ff, ws, [0.13, -0.26, 0.16], () => bumpUserScale(1.08), '', 'button:scale-up');
+function carryToTomorrow(note = '', taskId?: string | null) {
+  const saved = S.saveCarryOver(state, note, taskId);
+  if (!saved) { showActionToast('Pick a task first — pinch one onto the desk stand'); companion?.announce('Place a task on your desk first.'); return; }
+  layoutCards(); board.redraw(); focusCue.redraw(); persist();
+  showActionToast('Where you left off is saved for tomorrow');
+  companion?.announce('Where you left off is saved.');
 }
 
 const plant = new Plant(); plant.position.set(PLANT_X, PLANT_Y, PLANT_Z); plant.scale.setScalar(1.35); ws.add(plant);
@@ -363,7 +390,8 @@ let actionToastUntil = 0;
 const focusCue = new Panel(TOAST_W, TOAST_H, 1400, (g, W, H) => {
   const task = state.cards.find(c => c.id === state.focusId) ?? S.singleParked(state);
   const running = state.timer.running && state.timer.mode === 'focus';
-  const cue = actionToast || (task?.nextStep ? `Next: ${task.nextStep}` : running ? 'One thing. Right here. Let the rest wait.' : task ? 'Ready when you are · Start focus' : 'Leave one task on your desk');
+  const leftOff = S.leftOffGreeting(state);
+  const cue = actionToast || leftOff || (task?.nextStep ? `Next: ${task.nextStep}` : running ? 'One thing. Right here. Let the rest wait.' : task ? 'Ready when you are · Start focus' : 'Leave one task on your desk');
   roundRect(g, 0, 0, W, H, 18); g.fillStyle = actionToast ? '#1a2a4a' : '#102a29'; g.fill();
   g.font = `650 ${H * 0.36}px system-ui`;
   text(g, ellipsize(g, cue, W - 32), W / 2, H / 2, H * 0.36, actionToast ? '#d6e6ff' : '#b6f1cf', 650, 'center');
@@ -373,8 +401,9 @@ focusCue.scale.set(TIMER_W / TOAST_W, 1, 1);
 let lastFocusSignature = '';
 function updateQuietFocus() {
   const teaching = S.needsOnboarding(state);
-  const quiet = !teaching && state.onboarded && state.timer.running && state.timer.mode === 'focus' && state.cards.some(c => c.id === state.focusId && c.column !== 'done');
-  const signature = `${quiet}:${teaching}:${state.onboarded}:${state.habit.mode}:${voicePanel.visible}:${state.focusId}:${state.cards.find(c => c.id === state.focusId)?.nextStep || ''}`;
+  const quiet = !teaching && state.onboarded && S.isQuietFocus(state);
+  const compactKey = [...(S.compactVisibleIds(state) ?? [])].join(',');
+  const signature = `${quiet}:${teaching}:${state.onboarded}:${state.habit.mode}:${voicePanel.visible}:${state.focusId}:${state.compactBoard}:${compactKey}:${state.cards.find(c => c.id === state.focusId)?.nextStep || ''}:${state.carryOver?.note || ''}`;
   if (signature === lastFocusSignature) return;
   lastFocusSignature = signature;
   if (actionToast && performance.now() > actionToastUntil) actionToast = '';
@@ -382,7 +411,9 @@ function updateQuietFocus() {
   board.material.opacity = quiet ? 0.22 : 1;
   for (const it of cardMeshes.values()) it.panel.material.opacity = quiet && it.obj.parent === boardPlane ? 0.22 : 1;
   for (const it of noteMeshes.values()) it.panel.material.opacity = quiet ? 0.28 : 1;
-  focusCue.redraw(); timerPanel.redraw();
+  layoutCards();
+  lastFocusSignature = signature;
+  focusCue.redraw(); timerPanel.redraw(); board.redraw();
 }
 
 let payoffText = '';
@@ -598,9 +629,12 @@ function rememberPose(surface?: 'desk' | 'wall') {
     quaternion: [ws.quaternion.x, ws.quaternion.y, ws.quaternion.z, ws.quaternion.w],
     anchorId: null,
     surface,
+    scale: userScale,
   };
   syncPlaceChrome();
-  wantAnchor = renderer.xr.isPresenting; persist();
+  // Only follow a spatial anchor after an explicit desk/wall place. Auto
+  // "in front of the head" poses must not snap onto a nearby table plane.
+  wantAnchor = renderer.xr.isPresenting && !!surface; persist();
 }
 const headPos = new THREE.Vector3();
 const headDir = new THREE.Vector3();
@@ -612,28 +646,97 @@ let recenterUntil = 0;
 let recenterDoneAt = new THREE.Vector3();
 let didSessionRecenter = false;
 
+function readIwerDevicePose() {
+  const d = (window as unknown as { __iwer?: { position?: { x: number; y: number; z: number }; quaternion?: { x: number; y: number; z: number; w: number } } }).__iwer;
+  if (!d?.position || !d.quaternion) return null;
+  headPos.set(d.position.x, d.position.y, d.position.z);
+  headQuat.set(d.quaternion.x, d.quaternion.y, d.quaternion.z, d.quaternion.w);
+  if (headQuat.lengthSq() < 1e-8) return null;
+  headDir.set(0, 0, -1).applyQuaternion(headQuat);
+  lastViewerPos.copy(headPos);
+  lastViewerDir.copy(headDir);
+  haveViewerPose = true;
+  return { position: headPos, quaternion: headQuat, direction: headDir, tracked: true as const };
+}
 function readViewerPose(frame?: XRFrame) {
   const ref = renderer.xr.getReferenceSpace();
   if (frame && ref) {
     const pose = frame.getViewerPose(ref);
-    if (!pose) return null;
-    const t = pose.transform;
-    headPos.set(t.position.x, t.position.y, t.position.z);
-    headQuat.set(t.orientation.x, t.orientation.y, t.orientation.z, t.orientation.w);
-    headDir.set(0, 0, -1).applyQuaternion(headQuat);
-    lastViewerPos.copy(headPos);
-    lastViewerDir.copy(headDir);
-    const tracked = !poseLooksUntracked(t.position, t.orientation);
-    haveViewerPose = tracked;
-    return { position: headPos, quaternion: headQuat, direction: headDir, tracked };
+    if (pose) {
+      const t = pose.transform;
+      headPos.set(t.position.x, t.position.y, t.position.z);
+      headQuat.set(t.orientation.x, t.orientation.y, t.orientation.z, t.orientation.w);
+      headDir.set(0, 0, -1).applyQuaternion(headQuat);
+      lastViewerPos.copy(headPos);
+      lastViewerDir.copy(headDir);
+      const tracked = !poseLooksUntracked(t.position, t.orientation);
+      haveViewerPose = tracked;
+      return { position: headPos, quaternion: headQuat, direction: headDir, tracked };
+    }
   }
-  return null;
+  // When XR rAF is late (headless IWER), still pick up a live emulator pose
+  // so Recenter follows a just-applied headset yaw.
+  return readIwerDevicePose();
 }
 
 const lastViewerPos = new THREE.Vector3();
 const lastViewerDir = new THREE.Vector3(0, 0, -1);
 const recenterDoneDir = new THREE.Vector3(0, 0, -1);
 let haveViewerPose = false;
+let lastSupport: SupportSurface | undefined;
+let appliedSupportFront: number | undefined;
+let lastHTan = 1.6;
+const _planeN = new THREE.Vector3();
+const _planeQ = new THREE.Quaternion();
+const _planeP = new THREE.Vector3();
+
+function considerSupport(height: number, front: number, best: { score: number; surface?: SupportSurface }) {
+  if (!haveViewerPose) return;
+  if (front < 0.08 || front > 2.2) return;
+  if (front >= best.score) return;
+  best.score = front;
+  best.surface = { height, front };
+}
+
+function readSupportSurface(frame?: XRFrame) {
+  if (!frame) return lastSupport;
+  const ref = renderer.xr.getReferenceSpace();
+  const best = { score: Infinity, surface: lastSupport };
+  const dir = haveViewerPose ? flattenForward(lastViewerDir.x, lastViewerDir.y, lastViewerDir.z) : null;
+  if (hitValid && hitNormal.y > 0.65 && dir) {
+    const along = (hitPoint.x - lastViewerPos.x) * dir.x + (hitPoint.z - lastViewerPos.z) * dir.z;
+    // A hit is on the surface, not the near edge; back off a typical half-depth.
+    considerSupport(hitPoint.y, Math.max(0.15, along - 0.2), best);
+  }
+  if (ref && dir && frame.detectedPlanes) {
+    for (const plane of frame.detectedPlanes) {
+      const pose = frame.getPose(plane.planeSpace, ref);
+      if (!pose) continue;
+      const t = pose.transform;
+      _planeQ.set(t.orientation.x, t.orientation.y, t.orientation.z, t.orientation.w);
+      _planeN.set(0, 1, 0).applyQuaternion(_planeQ);
+      if (_planeN.y < 0.65) continue;
+      const poly = plane.polygon;
+      if (poly && poly.length) {
+        let minAlong = Infinity;
+        let height = t.position.y;
+        for (const pt of poly) {
+          _planeP.set(pt.x, pt.y, pt.z).applyQuaternion(_planeQ);
+          _planeP.x += t.position.x; _planeP.y += t.position.y; _planeP.z += t.position.z;
+          const along = (_planeP.x - lastViewerPos.x) * dir.x + (_planeP.z - lastViewerPos.z) * dir.z;
+          if (along < minAlong) minAlong = along;
+          height = _planeP.y;
+        }
+        considerSupport(height, minAlong, best);
+      } else {
+        const along = (t.position.x - lastViewerPos.x) * dir.x + (t.position.z - lastViewerPos.z) * dir.z;
+        considerSupport(t.position.y, Math.max(0.15, along - 0.2), best);
+      }
+    }
+  }
+  if (best.surface) lastSupport = best.surface;
+  return lastSupport;
+}
 
 function showActionToast(message: string, ms = 2200) {
   actionToast = message;
@@ -643,38 +746,66 @@ function showActionToast(message: string, ms = 2200) {
   focusCue.redraw();
 }
 
-function applyWorkspaceInFront(head: { x: number; y: number; z: number }, look: { x: number; y: number; z: number }) {
+function applyWorkspaceInFront(head: { x: number; y: number; z: number }, look: { x: number; y: number; z: number }, surface?: SupportSurface) {
   followAnchor = false; liveAnchor = null;
-  const pose = workspacePoseFromHead(head, look);
+  const pose = workspacePoseFromHead(head, look, undefined, undefined, surface);
   ws.visible = true;
   ws.position.set(pose.position.x, pose.position.y, pose.position.z);
   wsFacing.set(pose.facing.x, pose.facing.y, pose.facing.z);
   if (wsFacing.lengthSq() > 0) ws.quaternion.setFromUnitVectors(UNIT_Z, wsFacing);
   else ws.quaternion.identity();
+  const lookLen = Math.hypot(look.x, look.y, look.z) || 1;
+  const depth = (
+    (pose.position.x - head.x) * look.x +
+    (pose.position.y - head.y) * look.y +
+    (pose.position.z - head.z) * look.z
+  ) / lookLen;
+  const span = boardSpanAt(Math.max(depth, 0.2), lastHTan);
+  const scale = Math.min(2, Math.max(0.85, BOARD_SPAN_TARGET / Math.max(span, 0.05)));
+  // Scale the board only. Uniform workspace scale also raises the timer and
+  // pushes it out of a downward FOV.
+  ws.scale.setScalar(userScale);
+  board.scale.setScalar(scale);
+  appliedSupportFront = surface?.front;
   rememberPose();
 }
 
-function xrViewCamera() {
+const proofCam = new THREE.PerspectiveCamera();
+proofCam.matrixAutoUpdate = false;
+proofCam.matrixWorldAutoUpdate = false;
+
+/** Viewer-centred camera for proofs. Do not mutate the live XR cameras. */
+function xrProofCamera() {
   if (!renderer.xr.isPresenting) {
     camera.updateMatrixWorld(true);
     return camera;
   }
   const xrCam = renderer.xr.getCamera();
-  xrCam.updateMatrixWorld(true);
   const views = (xrCam as THREE.ArrayCamera).cameras;
-  if (views && views.length) {
-    views[0].updateMatrixWorld(true);
-    return views[0];
+  const src = views && views.length ? views[0] : xrCam;
+  proofCam.matrixWorld.copy(xrCam.matrixWorld);
+  proofCam.matrixWorldInverse.copy(xrCam.matrixWorld).invert();
+  if (src?.projectionMatrix) proofCam.projectionMatrix.copy(src.projectionMatrix);
+  if (src && 'projectionMatrixInverse' in src && src.projectionMatrixInverse) {
+    proofCam.projectionMatrixInverse.copy(src.projectionMatrixInverse);
+  } else {
+    proofCam.projectionMatrixInverse.copy(proofCam.projectionMatrix).invert();
   }
-  return xrCam;
+  return proofCam;
 }
 
 /** Recenter from the live XR viewer pose, not the leftover desktop camera. */
 function recenter() {
   pendingRecenter = true;
   recenterUntil = performance.now() + 1000;
-  if (renderer.xr.isPresenting && haveViewerPose) {
-    applyWorkspaceInFront(lastViewerPos, lastViewerDir);
+  const viewer = readViewerPose();
+  if (renderer.xr.isPresenting && viewer) {
+    applyWorkspaceInFront(viewer.position, viewer.direction, lastSupport);
+    recenterDoneAt.copy(viewer.position);
+    recenterDoneDir.copy(viewer.direction);
+    didSessionRecenter = true;
+  } else if (renderer.xr.isPresenting && haveViewerPose) {
+    applyWorkspaceInFront(lastViewerPos, lastViewerDir, lastSupport);
     recenterDoneAt.copy(lastViewerPos);
     recenterDoneDir.copy(lastViewerDir);
     didSessionRecenter = true;
@@ -691,22 +822,22 @@ function settleWorkspaceInView(frame?: XRFrame) {
   const settling = pendingRecenter || now <= recenterUntil;
   const jumped = didSessionRecenter && settling && viewer && viewer.position.distanceTo(recenterDoneAt) > 0.3;
   const turned = didSessionRecenter && settling && viewer && viewer.direction.dot(recenterDoneDir) < 0.97;
-  if (!pendingRecenter && !jumped && !turned && now > recenterUntil) return;
+  const supportReady = !!lastSupport && (appliedSupportFront == null || Math.abs((lastSupport.front ?? -1) - appliedSupportFront) > 0.03);
+  if (!pendingRecenter && !jumped && !turned && now > recenterUntil && !supportReady) return;
   if (viewer && !viewer.tracked && now < recenterUntil) return;
   if (!viewer && now < recenterUntil) return;
   if (viewer) {
-    applyWorkspaceInFront(viewer.position, viewer.direction);
+    applyWorkspaceInFront(viewer.position, viewer.direction, lastSupport);
     recenterDoneAt.copy(viewer.position);
     recenterDoneDir.copy(viewer.direction);
   } else if (haveViewerPose) {
-    applyWorkspaceInFront(lastViewerPos, lastViewerDir);
+    applyWorkspaceInFront(lastViewerPos, lastViewerDir, lastSupport);
     recenterDoneAt.copy(lastViewerPos);
     recenterDoneDir.copy(lastViewerDir);
   } else {
-    const xrCam = xrViewCamera();
-    xrCam.getWorldPosition(headPos);
-    xrCam.getWorldDirection(headDir);
-    applyWorkspaceInFront(headPos, headDir);
+    camera.getWorldPosition(headPos);
+    camera.getWorldDirection(headDir);
+    applyWorkspaceInFront(headPos, headDir, lastSupport);
     recenterDoneAt.copy(headPos);
     recenterDoneDir.copy(headDir);
   }
@@ -733,6 +864,9 @@ function placeWorkspace(point: THREE.Vector3, normal: THREE.Vector3) {
   if (face.lengthSq() < 1e-6) face.set(0, 0, 1);
   face.normalize();
   ws.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), face);
+  userScale = state.placement?.scale ?? userScale;
+  ws.scale.setScalar(userScale);
+  board.scale.setScalar(1);
   ws.position.copy(point);
   if (kind === 'desk') ws.position.y += 0.22; else ws.position.addScaledVector(normal, 0.03);
   placing = false; reticle.visible = false; rememberPose(kind); sfx.drop();
@@ -782,7 +916,11 @@ const voicePanel = new Panel(0.58, 0.16, 1400, (g, W, H) => {
 });
 voicePanel.position.set(0, COACH_Y + 0.015, TIMER_Z + 0.015); voicePanel.visible = false; ws.add(voicePanel);
 const acceptVoice = mkBtn('Use words', 0.13, 0x2fc59b, voicePanel, [-0.15, -0.055, 0.008], () => usePendingVoice(), '', 'button:voice-accept');
-mkBtn('Cancel', 0.12, 0x9b6bff, voicePanel, [0, -0.055, 0.008], () => { discardRecording = true; capture.stop(); rec?.stop(); pendingVoice = ''; voicePanel.visible = false; voiceStatus('Voice cancelled'); refreshMode(); }, '', 'button:voice-cancel');
+mkBtn('Hands instead', 0.14, 0x8fb4ff, voicePanel, [0, -0.055, 0.008], () => {
+  discardRecording = true; capture.stop(); rec?.stop(); pendingVoice = ''; voicePanel.visible = false;
+  const hint = S.voiceFallbackHint('unavailable');
+  voiceStatus(hint); showActionToast(hint); refreshMode();
+}, '', 'button:voice-cancel');
 mkBtn('Mic / Stop', 0.13, 0xff6b8a, voicePanel, [0.15, -0.055, 0.008], () => { void toggleMic(); }, '', 'button:voice-stop');
 function showVoicePanel() { voicePanel.visible = true; tut.visible = false; skipTut.obj.visible = false; modePanel.visible = false; acceptVoice.obj.visible = !!pendingVoice; voicePanel.redraw(); }
 function gotTranscript(text: string) {
@@ -809,7 +947,7 @@ async function toggleMic() {
         if (discardRecording) { micBusy = false; return; }
         voiceStatus('Transcribing with OpenAI…'); showVoicePanel();
         try { gotTranscript(await transcribeAudio(audio, cloudEndpoint)); }
-        catch (error) { voiceStatus(error instanceof Error ? error.message : 'Voice failed. Use Capture & desk to type.'); showVoicePanel(); }
+        catch (error) { const hint = describeVoiceError(error); voiceStatus(hint); showActionToast(hint); showVoicePanel(); }
         finally { micBusy = false; }
       }, error => { micBusy = false; voiceStatus(error.message); showVoicePanel(); });
       if (discardRecording) { capture.stop(); return; }
@@ -818,17 +956,26 @@ async function toggleMic() {
       return;
     }
     rec = recognition();
-    if (!rec) throw new Error('Voice unavailable here. Open Capture & desk to type.');
+    if (!rec) throw new Error(S.voiceFallbackHint('unavailable'));
     voiceStatus('Listening · browser speech · tap Mic to stop'); showVoicePanel();
     rec.onresult = ev => gotTranscript(ev.results[0]?.[0]?.transcript ?? '');
-    rec.onerror = ev => { voiceStatus(ev.error === 'not-allowed' ? 'Microphone permission denied. Open Capture & desk to type.' : 'Could not hear you. Try again or type.'); showVoicePanel(); };
-    rec.onend = () => { micBusy = false; if (listenHint.startsWith('Listening')) { voiceStatus('No words heard. Try again or type.'); showVoicePanel(); } };
+    rec.onerror = ev => { const hint = ev.error === 'not-allowed' ? S.voiceFallbackHint('mic') : S.voiceFallbackHint('unavailable'); voiceStatus(hint); showActionToast(hint); showVoicePanel(); };
+    rec.onend = () => { micBusy = false; if (listenHint.startsWith('Listening')) { voiceStatus('No words heard. Try again or type in Capture & desk.'); showVoicePanel(); } };
     rec.start();
   } catch (error) {
     micBusy = false;
-    voiceStatus(error instanceof DOMException && error.name === 'NotAllowedError' ? 'Microphone permission denied. Open Capture & desk to type.' : error instanceof Error ? error.message : 'Microphone unavailable. Type your thought.');
+    const hint = describeVoiceError(error);
+    voiceStatus(hint); showActionToast(hint);
     showVoicePanel();
   }
+}
+function describeVoiceError(error: unknown) {
+  if (error instanceof DOMException && (error.name === 'NotAllowedError' || error.name === 'NotFoundError')) return S.voiceFallbackHint('mic');
+  if (error instanceof TypeError) return S.voiceFallbackHint('network');
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  if (/not-allowed|permission|NotAllowedError/i.test(message)) return S.voiceFallbackHint('mic');
+  if (/network|fetch|Failed to fetch|offline/i.test(message)) return S.voiceFallbackHint('network');
+  return S.voiceFallbackHint('unavailable');
 }
 
 // ---------- input ----------
@@ -1007,7 +1154,9 @@ function updatePointers(frame?: XRFrame) {
       else if (h?.kind === 'button') press(h);
     }
     if (!p.pinching && p.wasPinching && p.grabbed) release(p);
-    if (p.grabbed) {
+    if (p.grabbed?.kind === 'handle') {
+      ws.position.copy(p.pinchPos).add(p.offset);
+    } else if (p.grabbed) {
       const o = p.grabbed.obj;
       o.position.copy(o.parent!.worldToLocal(v.copy(p.pinchPos).add(p.offset)));
       trashP.redraw(overTrash(o));
@@ -1031,6 +1180,16 @@ function updatePointers(frame?: XRFrame) {
 function press(it: Item) { sfx.press(); it.obj.userData.pop = it.obj.userData.baseScale ?? 1; it.obj.scale.setScalar((it.obj.userData.baseScale ?? 1) * 0.9); it.onPress?.(); }
 function grab(p: Pointer, it: Item) {
   p.grabbed = it; sfx.grab();
+  if (it.kind === 'handle') {
+    p.offset.copy(ws.position).sub(p.pinchPos);
+    if (p.key === 'mouse' && p.ray) {
+      const n = new THREE.Vector3(0, 1, 0);
+      dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, p.pinchPos);
+      p.ray.intersectPlane(dragPlane, p.pinchPos);
+      p.offset.copy(ws.position).sub(p.pinchPos);
+    }
+    return;
+  }
   const wp = it.obj.getWorldPosition(new THREE.Vector3()); const wq = it.obj.getWorldQuaternion(new THREE.Quaternion());
   ws.attach(it.obj);
   it.obj.quaternion.copy(ws.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(wq));
@@ -1073,6 +1232,13 @@ function pinnedBlockers(exceptId: string) {
 }
 function release(p: Pointer) {
   const it = p.grabbed!; p.grabbed = null; it.obj.scale.setScalar(it.obj.userData.baseScale ?? 1); trashP.redraw(false);
+  if (it.kind === 'handle') {
+    const kind = hitValid ? S.surfaceKind(hitNormal.y) : state.placement?.surface;
+    if (kind === 'desk' && hitValid) ws.position.y = Math.max(ws.position.y, hitPoint.y + 0.16);
+    rememberPose(kind);
+    showActionToast('Workspace placed — grab the handle again to adjust');
+    return;
+  }
   remember();
   if (overTrash(it.obj)) {
     it.kind === 'card' ? S.deleteCard(state, it.id!) : S.deleteNote(state, it.id!);
@@ -1231,7 +1397,8 @@ function applyEnvironment(mode: 'ar' | 'vr' | 'desktop') {
 }
 function parkDesktop() {
   camera.rotation.set(0, 0, 0);
-  ws.position.set(0, DESKTOP_CAM_Y - EYE_DROP, DESKTOP_WS_Z); ws.quaternion.identity();
+  userScale = 1;
+  ws.position.set(0, DESKTOP_CAM_Y - EYE_DROP, DESKTOP_WS_Z); ws.quaternion.identity(); ws.scale.setScalar(1); board.scale.setScalar(1);
   frameDesktop();
 }
 async function setupHitTest(session: XRSession) {
@@ -1254,7 +1421,7 @@ async function beginSession(prefer: 'ar' | 'vr') {
           // local-floor is optional so a missing feature does not fall back to VR (and a starfield).
           // depth-sensing is omitted on purpose. The emulator implements it by
           // calling readPixels on a depth target every frame, which stalls the GPU.
-          optionalFeatures: ['local-floor', 'hand-tracking', 'hit-test', 'plane-detection', 'anchors', 'dom-overlay', 'light-estimation'],
+          optionalFeatures: ['local-floor', 'hand-tracking', 'hit-test', 'plane-detection', 'anchors', 'dom-overlay'],
         });
         mode = 'ar';
       }
@@ -1290,7 +1457,8 @@ async function beginSession(prefer: 'ar' | 'vr') {
 function onSessionEnd() {
   document.body.classList.remove('in-xr');
   hitSource = null; liveAnchor = null; followAnchor = false; placing = false; reticle.visible = false; handMenu.visible = false;
-  pendingRecenter = false; recenterUntil = 0; didSessionRecenter = false; haveViewerPose = false;
+  pendingRecenter = false; recenterUntil = 0; didSessionRecenter = false; haveViewerPose = false; lastSupport = undefined; appliedSupportFront = undefined;
+  viewProofCache = null;
   currentMode = null; renderer.setPixelRatio(Math.min(devicePixelRatio, 1.25));
   parkDesktop(); applyEnvironment('desktop');
   const next = pendingMode; pendingMode = null;
@@ -1351,13 +1519,25 @@ function updateAnchor(frame?: XRFrame) {
 }
 
 const frameTimer = new THREE.Timer(); let lastSec = -1;
-renderer.setAnimationLoop((time, frame) => {
+let xrFrameId = 0;
+let xrFrameTime = 0;
+let lastLoopWall = 0;
+let loopBusy = false;
+function runXrLoop(time: number, frame?: XRFrame, opts?: { render?: boolean }) {
+  if (loopBusy) return;
+  loopBusy = true;
+  const doRender = opts?.render !== false;
+  try {
+  xrFrameId += 1;
+  xrFrameTime = time;
+  lastLoopWall = performance.now();
+  try {
   frameTimer.update(time);
   const dt = Math.min(frameTimer.getDelta(), 0.05);
   if (currentMode === 'ar' && (scene.background || stars.visible || grid.visible || ring.visible)) applyEnvironment('ar');
+  readSupportSurface(frame);
   settleWorkspaceInView(frame);
   if (actionToast && performance.now() > actionToastUntil) { actionToast = ''; lastFocusSignature = ''; updateQuietFocus(); }
-  cacheWorkspaceViewProof();
   if (!renderer.xr.isPresenting) { if (keys.has('a')) camera.rotation.y += dt; if (keys.has('d')) camera.rotation.y -= dt; gazeDot.visible = false; }
   else {
     camera.getWorldPosition(gazeDot.position);
@@ -1399,8 +1579,34 @@ renderer.setAnimationLoop((time, frame) => {
   if (fpsAccum >= 0.5) { fpsValue = Math.round(fpsFrames / fpsAccum); fpsFrames = 0; fpsAccum = 0; if (fpsValue !== fpsShown) { fpsShown = fpsValue; fpsPanel.redraw(); } }
   if (ring.visible) ring.rotation.z += dt * 0.1;
   if (stars.visible) stars.rotation.y += dt * 0.005;
-  renderer.render(scene, camera);
+  if (doRender) renderer.render(scene, camera);
+  } catch (err) {
+    console.error(err);
+    if (doRender) { try { renderer.render(scene, camera); } catch { /* keep the XR loop alive */ } }
+  }
+  try { cacheWorkspaceViewProof(); } catch { /* proof must never stall presentation */ }
+  } finally { loopBusy = false; }
+}
+let lastXrRafWall = 0;
+let lastPumpRenderWall = 0;
+renderer.setAnimationLoop((time, frame) => {
+  lastXrRafWall = performance.now();
+  runXrLoop(time, frame);
 });
+// IWER's device loop is window rAF, which can drop to a trickle in headless
+// Chrome / SwiftShader after entering MR. Keep the rAF chain warm and keep
+// settling/proofs moving on a timer even when those XR frames are late.
+setInterval(() => {
+  requestAnimationFrame(() => { /* keep window rAF scheduled while presenting */ });
+  if (!renderer.xr.isPresenting) return;
+  const now = performance.now();
+  const stalled = lastXrRafWall <= 0 || now - lastXrRafWall > 200;
+  if (!stalled) return;
+  const render = now - lastPumpRenderWall > 200;
+  if (render) lastPumpRenderWall = now;
+  runXrLoop(now, undefined, { render });
+}, 50);
+
 const pointersGrab = (it: Item) => {
   for (const p of pointers.values()) if (p.grabbed === it) return true;
   return false;
@@ -1549,8 +1755,8 @@ function projectWorldToNdc(point: THREE.Vector3, cam: THREE.Camera): Ndc {
 }
 
 function computeWorkspaceViewProof() {
-  const cam = xrViewCamera();
-  cam.updateMatrixWorld(true);
+  const cam = xrProofCamera();
+  if (cam === camera) cam.updateMatrixWorld(true);
   ws.updateMatrixWorld(true);
   board.updateMatrixWorld(true);
   timerPanel.updateMatrixWorld(true);
@@ -1565,10 +1771,16 @@ function computeWorkspaceViewProof() {
   const timerNdc = projectWorldToNdc(timerTopPos, cam);
   const timerCenterNdc = projectWorldToNdc(timerPos, cam);
   const boardNdc = projectWorldToNdc(boardPos, cam);
+  const boardLeftNdc = projectWorldToNdc(board.localToWorld(_world.set(-BOARD_W / 2, 0, 0).clone()), cam);
+  const boardRightNdc = projectWorldToNdc(board.localToWorld(_world.set(BOARD_W / 2, 0, 0).clone()), cam);
+  const boardSpan = Math.abs(boardRightNdc.x - boardLeftNdc.x) / 2;
+  const hTan = Math.abs(cam.projectionMatrix.elements[0]) > 1e-6 ? 1 / Math.abs(cam.projectionMatrix.elements[0]) : lastHTan;
+  if (Number.isFinite(hTan) && hTan > 0.2 && hTan < 8) lastHTan = hTan;
   _frustum.setFromProjectionMatrix(_proj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
   const toBoard = boardPos.clone().sub(camPos);
   const forward = toBoard.dot(camDir);
   const distance = camPos.distanceTo(wsPos);
+  const horizDistance = Math.hypot(wsPos.x - camPos.x, wsPos.z - camPos.z);
   return {
     presenting: renderer.xr.isPresenting,
     mode: currentMode,
@@ -1585,20 +1797,47 @@ function computeWorkspaceViewProof() {
     timerNdc,
     timerCenterNdc,
     boardNdc,
+    boardLeftNdc,
+    boardRightNdc,
+    boardSpan,
     distance,
+    horizDistance,
+    scale: board.scale.x,
+    support: lastSupport ? { height: lastSupport.height, front: lastSupport.front ?? null } : null,
     forward,
     inFront: forward > 0.25,
     boardInView: headerNdc.inView && boardNdc.inView,
     timerInView: timerNdc.inView && timerCenterNdc.inView,
     pendingRecenter,
     toast: actionToast,
+    frameId: xrFrameId,
+    frameTime: xrFrameTime,
+    fps: fpsValue,
   };
 }
-function cacheWorkspaceViewProof() { viewProofCache = computeWorkspaceViewProof(); }
+function cacheWorkspaceViewProof() {
+  try {
+    viewProofCache = computeWorkspaceViewProof();
+  } catch {
+    if (viewProofCache) viewProofCache = { ...viewProofCache, frameId: xrFrameId, frameTime: xrFrameTime, fps: fpsValue };
+  }
+}
+
 function workspaceViewProof() { return viewProofCache ?? computeWorkspaceViewProof(); }
 (window as unknown as { handflow?: unknown }).handflow = {
-  state, recenter, screenOf, workspaceViewProof, deskLayoutProof: () => ({ surface: state.placement?.surface, toolbarY: dock.position.y, tabletopY: -0.22, trashY: dock.position.y + trashP.position.y, standsY: S.DESK_SLOTS.map(s => s.y) }), focusProof: () => ({ quiet: board.material.opacity < 1, plantProgress: plant.focus, plantStage: plant.stage }), voiceProof: () => ({ endpoint: cloudEndpoint, pending: pendingVoice, message: voiceMessage }), fps: () => fpsValue, refresh: () => { refreshMode(); applyA11y(); },
+  state, recenter, screenOf, workspaceViewProof, frameProof: () => ({ id: xrFrameId, time: xrFrameTime, fps: fpsValue, presenting: renderer.xr.isPresenting }), deskLayoutProof: () => ({ surface: state.placement?.surface, toolbarY: dock.position.y, tabletopY: -0.22, trashY: dock.position.y + trashP.position.y, standsY: S.DESK_SLOTS.map(s => s.y) }), focusProof: () => ({ quiet: board.material.opacity < 1, plantProgress: plant.focus, plantStage: plant.stage, compact: !!S.compactVisibleIds(state), visible: [...(S.compactVisibleIds(state) ?? [])] }), voiceProof: () => ({ endpoint: cloudEndpoint, pending: pendingVoice, message: voiceMessage, panel: voicePanel.visible, fallback: /pinch a task|hands/i.test(voiceMessage) }), adjustProof: () => ({ scale: userScale, handle: handleBar.position.toArray() }), ritualProof: () => ({ carry: state.carryOver, greeting: S.leftOffGreeting(state) }), fps: () => fpsValue, refresh: () => { refreshMode(); applyA11y(); },
   dictate: (text: string) => applySaid(text),
+  nudgeViewer: (yawDeg: number) => {
+    const d = (window as unknown as { __iwer?: { quaternion?: { x: number; y: number; z: number; w: number; set?: Function; normalize?: Function } } }).__iwer;
+    if (!d?.quaternion) return false;
+    const q = new THREE.Quaternion(d.quaternion.x, d.quaternion.y, d.quaternion.z, d.quaternion.w);
+    q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yawDeg * Math.PI / 180));
+    if (typeof d.quaternion.set === 'function') d.quaternion.set(q.x, q.y, q.z, q.w);
+    else { d.quaternion.x = q.x; d.quaternion.y = q.y; d.quaternion.z = q.z; d.quaternion.w = q.w; }
+    d.quaternion.normalize?.();
+    readIwerDevicePose();
+    return true;
+  },
   holdMenu: (on: boolean) => { menuHold = on; if (on) poseHeldMenu(); else { handMenu.visible = false; palmOpen = false; } },
   menuOpen: () => handMenu.visible,
   palmDot: () => palmDot,
@@ -1665,6 +1904,9 @@ function submitThought(kind: string, words: string) {
     const task = state.cards.find(c => c.id === state.focusId && c.column !== 'done') ?? S.singleParked(state);
     if (!task || !S.leaveNextStep(state, task.id, words)) { undos.pop(); companion?.announce('Place one open task on your desk first.'); return; }
     layoutCards(); focusCue.redraw();
+  } else if (kind === 'carry') {
+    carryToTomorrow(words);
+    persist(); sfx.drop(); return;
   } else { const card = S.addCustomCard(state, words); showCard(card); layoutCards(); advanceTutorial('create'); }
   persist(); sfx.drop(); companion?.announce(kind === 'next' ? 'Next step saved with your desk task.' : kind === 'note' ? 'Your note is in the workspace.' : 'Your task is on the board.');
 }
@@ -1675,8 +1917,26 @@ companion = mountCompanion(state, {
   remove: id => { remember(); S.deleteCard(state, id); layoutCards(); persist(); companion?.announce('Task deleted. Undo is available.'); },
   timer: () => { startBtn.onPress?.(); companion?.refresh(); },
   undo: undoLast, mic: () => { void toggleMic(); }, acceptVoice: usePendingVoice,
-  setting: key => toggleSetting(key, key),
+  setting: key => {
+    if (key === 'compactBoard') {
+      state.compactBoard = !state.compactBoard;
+      layoutCards(); board.redraw(); persist();
+      companion?.announce(state.compactBoard ? 'Compact board on — focus plus the next three.' : 'Full board restored.');
+      return;
+    }
+    toggleSetting(key, key);
+  },
   duration: minutes => { if (state.timer.running) { companion?.announce('Pause the timer before changing its length.'); return; } setFocusLength(minutes); companion?.announce(`${minutes}-minute focus selected.`); },
 });
 companion.refresh();
+{
+  const hello = S.leftOffGreeting(state);
+  if (hello) {
+    showActionToast(hello, 4200);
+    S.markCarryOverGreeted(state);
+    persist();
+    board.redraw();
+    focusCue.redraw();
+  }
+}
 addEventListener('blur', () => keys.clear());

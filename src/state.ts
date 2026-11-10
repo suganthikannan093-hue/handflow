@@ -21,12 +21,26 @@ export interface A11y {
 export type DayMode = 'morning' | 'work' | 'winddown';
 export interface DayRecord { date: string; planned: number; completed: number; focusSessions: number; reviewed: boolean }
 export interface Habit { mode: DayMode; streak: number; lastDate: string | null; history: DayRecord[] }
-export interface Placement { position: [number, number, number]; quaternion: [number, number, number, number]; anchorId: string | null; surface?: 'desk' | 'wall' }
+export interface Placement { position: [number, number, number]; quaternion: [number, number, number, number]; anchorId: string | null; surface?: 'desk' | 'wall'; scale?: number }
+export interface CarryOver {
+  taskId: string | null;
+  taskTitle: string;
+  note: string;
+  savedAt: number;
+  greeted: boolean;
+}
 export interface WorkspaceState {
   version: 1; cards: Card[]; notes: Note[]; timer: Timer; onboarded: boolean;
   tutorialStep: number; onboardingVersion: number; a11y: A11y; habit: Habit; placement: Placement | null; mrPreferred: boolean;
   focusId: string | null;
+  carryOver: CarryOver | null;
+  compactBoard: boolean;
 }
+/** Interactive targets should stay within this of a seated user's hands. */
+export const HAND_REACH = 0.6;
+/** Compact focus view: the chosen task plus this many waiting cards. */
+export const COMPACT_NEXT = 3;
+export const CARRY_NOTE_MAX = 180;
 /** Three stands in front of the board, inside the 30° cone. A task left here stays across sessions. */
 export const DESK_SLOTS = [
   { x: -0.12, y: -0.18, z: 0.15 },
@@ -93,6 +107,7 @@ export function createInitialState(): WorkspaceState {
   const s: WorkspaceState = {
     version: 1, cards: [], notes: [], onboarded: false, tutorialStep: 0, onboardingVersion: 0,
     a11y: defaultA11y(), habit: defaultHabit(), placement: null, mrPreferred: true, focusId: null,
+    carryOver: null, compactBoard: false,
     timer: { durationMs: FOCUS_MS, remainingMs: FOCUS_MS, running: false, startedAt: null, endsAt: null, mode: 'focus', completed: 0 },
   };
   addCard(s, 0, 'todo'); addCard(s, 1, 'todo'); addCard(s, 2, 'doing');
@@ -109,8 +124,89 @@ export function singleParked(s: WorkspaceState): Card | null {
 export function leaveNextStep(s: WorkspaceState, id: string, text: string): boolean {
   const card = s.cards.find(c => c.id === id && c.column !== 'done');
   if (!card || !text.trim()) return false;
-  card.nextStep = text.trim().slice(0, 180);
+  card.nextStep = text.trim().slice(0, CARRY_NOTE_MAX);
   return true;
+}
+export function isQuietFocus(s: WorkspaceState) {
+  if (!s.timer.running || s.timer.mode !== 'focus') return false;
+  const id = s.focusId ?? singleParked(s)?.id;
+  return !!id && s.cards.some(c => c.id === id && c.column !== 'done');
+}
+/** Ids that stay on the board in compact / quiet-focus mode. Null means show the full board. */
+export function compactVisibleIds(s: WorkspaceState, compact = s.compactBoard || isQuietFocus(s)): Set<string> | null {
+  if (!compact) return null;
+  const focus = s.cards.find(c => c.id === s.focusId && c.column !== 'done') ?? singleParked(s);
+  const rest = [...cardsIn(s, 'doing'), ...cardsIn(s, 'todo')].filter(c => c.id !== focus?.id);
+  const ids = new Set<string>();
+  if (focus) ids.add(focus.id);
+  for (const c of rest.slice(0, COMPACT_NEXT)) ids.add(c.id);
+  return ids;
+}
+export function targetWithinReach(
+  hand: { x: number; y: number; z: number },
+  target: { x: number; y: number; z: number },
+  max = HAND_REACH,
+) {
+  return Math.hypot(target.x - hand.x, target.y - hand.y, target.z - hand.z) <= max + 1e-6;
+}
+export function bringCardToFront(s: WorkspaceState, id: string) {
+  const card = s.cards.find(c => c.id === id);
+  if (!card || card.column === 'done') return false;
+  card.order = -1;
+  renumber(s, card.column);
+  return true;
+}
+export function carryTask(s: WorkspaceState, taskId?: string | null) {
+  return (taskId && s.cards.find(c => c.id === taskId && c.column !== 'done'))
+    || s.cards.find(c => c.id === s.focusId && c.column !== 'done')
+    || singleParked(s)
+    || cardsIn(s, 'doing')[0]
+    || cardsIn(s, 'todo')[0]
+    || null;
+}
+/** Persist a short context note and the chosen next task for the following launch. */
+export function saveCarryOver(s: WorkspaceState, note = '', taskId?: string | null, now = Date.now()): CarryOver | null {
+  const card = carryTask(s, taskId);
+  const trimmed = note.trim().slice(0, CARRY_NOTE_MAX) || card?.nextStep || (card ? 'Continue this tomorrow' : '');
+  if (!card && !trimmed) return null;
+  if (card && trimmed) leaveNextStep(s, card.id, trimmed);
+  if (card) bringCardToFront(s, card.id);
+  s.carryOver = {
+    taskId: card?.id ?? null,
+    taskTitle: card?.title ?? '',
+    note: trimmed,
+    savedAt: now,
+    greeted: false,
+  };
+  return s.carryOver;
+}
+export function leftOffGreeting(s: WorkspaceState) {
+  const c = s.carryOver;
+  if (!c || c.greeted) return null;
+  const parts = ['Where you left off'];
+  if (c.taskTitle) parts.push(c.taskTitle);
+  if (c.note) parts.push(c.note);
+  return parts.join(' · ');
+}
+export function markCarryOverGreeted(s: WorkspaceState) {
+  if (s.carryOver && !s.carryOver.greeted) s.carryOver.greeted = true;
+}
+export function applyCarryOverOnLoad(s: WorkspaceState) {
+  const c = s.carryOver;
+  if (!c) return;
+  if (c.taskId) {
+    const card = s.cards.find(x => x.id === c.taskId);
+    if (!card || card.column === 'done') c.taskId = null;
+    else {
+      c.taskTitle = card.title;
+      bringCardToFront(s, card.id);
+    }
+  }
+}
+export function voiceFallbackHint(reason: 'mic' | 'network' | 'unavailable' | string) {
+  if (reason === 'mic') return 'Microphone permission denied. Pinch a task onto the desk stand, or type in Capture & desk.';
+  if (reason === 'network') return 'Voice needs a network. Pinch a task onto the desk stand, or type in Capture & desk.';
+  return 'Voice is unavailable. Use your hands — pinch a task, poke a button, or type in Capture & desk.';
 }
 /** Nearest stand within reach, or -1. Coordinates are workspace-local metres. */
 export function nearestDeskSlot(x: number, y: number, z: number): number {
@@ -652,6 +748,18 @@ function hydrate(s: WorkspaceState): WorkspaceState {
   if (typeof s.onboardingVersion !== 'number') s.onboardingVersion = 0;
   if (!s.a11y.dwellMs) s.a11y.dwellMs = 800;
   s.focusId = typeof s.focusId === 'string' ? s.focusId : null;
+  s.compactBoard = !!s.compactBoard;
+  const rawCarry = s.carryOver;
+  if (rawCarry && typeof rawCarry === 'object') {
+    s.carryOver = {
+      taskId: typeof rawCarry.taskId === 'string' ? rawCarry.taskId : null,
+      taskTitle: typeof rawCarry.taskTitle === 'string' ? rawCarry.taskTitle : '',
+      note: typeof rawCarry.note === 'string' ? rawCarry.note.slice(0, CARRY_NOTE_MAX) : '',
+      savedAt: typeof rawCarry.savedAt === 'number' ? rawCarry.savedAt : 0,
+      greeted: !!rawCarry.greeted,
+    };
+    applyCarryOverOnLoad(s);
+  } else s.carryOver = null;
   s.timer.endsAt = typeof s.timer.endsAt === 'number' ? s.timer.endsAt : null;
   if (s.timer.running) {
     const anchor = s.timer.endsAt ?? s.timer.startedAt;

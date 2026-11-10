@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as S from '../src/state';
-import { fitsComfort, BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COACH_H, COACH_Y, COL_W, COLUMN_PAGE, DESKTOP_CAM_Y, DESKTOP_FOV, DESKTOP_WS_Z, DOCK_Y, DOCK_Z, DOCK_HALF, DUR_GAP, DUR_H, DUR_W, DUR_Y, EYE, EYE_DROP, MORE_H, MORE_Y, SKIP_TUT_H, SKIP_TUT_W, TIMER_BTN_H, TIMER_BTN_Y, TIMER_H, TIMER_Y, TIMER_Z, TIMER_W, TOAST_H, TOAST_Y, PLANT_X, XR_DROP, desktopCameraDistance, panelYFromCanvas, poseLooksUntracked, projectFromHead, workspaceLocalToWorld, workspacePoseFromHead } from '../src/layout';
+import { fitsComfort, BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COACH_H, COACH_Y, COL_W, COLUMN_PAGE, DESKTOP_CAM_Y, DESKTOP_FOV, DESKTOP_WS_Z, DOCK_X, DOCK_Y, DOCK_Z, DOCK_HALF, DUR_GAP, DUR_H, DUR_W, DUR_Y, EYE, EYE_DROP, MORE_H, MORE_Y, SKIP_TUT_H, SKIP_TUT_W, SUPPORT_CLEARANCE, TIMER_BTN_H, TIMER_BTN_Y, TIMER_H, TIMER_Y, TIMER_Z, TIMER_W, TOAST_H, TOAST_Y, PLANT_X, WORKSPACE_LOWEST, XR_DROP, boardSpanAt, desktopCameraDistance, panelYFromCanvas, poseLooksUntracked, projectFromHead, workspaceLocalToWorld, workspacePoseFromHead } from '../src/layout';
 
 const day = (y: number, m: number, d: number) => new Date(y, m - 1, d, 9, 0, 0);
 
@@ -400,21 +400,23 @@ describe('review fixes', () => {
     expect(DUR_GAP).toBeGreaterThan(DUR_W);
   });
 
-  it('places the workspace 0.9-1.1 m in front of a seated head and rejects an untracked identity pose', () => {
+  it('places the workspace 0.85-0.95 m in front of a seated head and rejects an untracked identity pose', () => {
     const pose = workspacePoseFromHead({ x: 0, y: 1.35, z: 0 }, { x: 0, y: 0, z: -1 });
-    expect(pose.dist).toBeGreaterThanOrEqual(0.9);
-    expect(pose.dist).toBeLessThanOrEqual(1.1);
+    expect(pose.dist).toBeGreaterThanOrEqual(0.85);
+    expect(pose.dist).toBeLessThanOrEqual(0.95);
     expect(pose.position.z).toBeCloseTo(-EYE);
     expect(pose.position.y).toBeCloseTo(1.35 - XR_DROP);
     expect(1.35 - pose.position.y).toBeGreaterThanOrEqual(0.15);
     expect(1.35 - pose.position.y).toBeLessThanOrEqual(0.25);
     expect(pose.facing.z).toBeCloseTo(1);
+    expect(pose.position.x).toBeCloseTo(0);
     expect(poseLooksUntracked({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0, w: 1 })).toBe(true);
     expect(poseLooksUntracked({ x: 0, y: 1.35, z: 0 }, { x: 0, y: 0, z: 0, w: 1 })).toBe(false);
     const turned = workspacePoseFromHead({ x: 1, y: 1.2, z: 2 }, { x: 0.8, y: -0.2, z: 0.2 });
     const dx = turned.position.x - 1, dz = turned.position.z - 2;
-    expect(Math.hypot(dx, dz)).toBeCloseTo(EYE);
+    expect(Math.hypot(dx, dz)).toBeCloseTo(turned.dist);
     expect(dx * 0.8 + dz * 0.2).toBeGreaterThan(0);
+    expect(boardSpanAt(EYE, Math.tan(Math.PI / 4))).toBeGreaterThanOrEqual(0.4);
     const content = (head: { x: number; y: number; z: number }, look: { x: number; y: number; z: number }) => {
       const seated = workspacePoseFromHead(head, look);
       const header = workspaceLocalToWorld(seated, { x: 0, y: BOARD_H / 2, z: BOARD_Z });
@@ -444,6 +446,33 @@ describe('review fixes', () => {
     const steep = content(head, { x: 0.2, y: -0.75, z: -0.63 });
     expect(steep.header.inView, JSON.stringify(steep.header)).toBe(true);
     expect(steep.timerTop.inView, JSON.stringify(steep.timerTop)).toBe(true);
+    // Yaw-only placement keeps the board centred even when the user looks down and to the side.
+    expect(Math.abs(seated.board.ndcX)).toBeLessThan(0.05);
+    expect(Math.abs(steep.board.ndcX)).toBeLessThan(0.05);
+    expect(Math.abs(flat.board.ndcX)).toBeLessThan(0.05);
+    // A desk in front of a seated user: sit just in front of the near edge, or above the tabletop.
+    const desk = workspacePoseFromHead(head, ahead, EYE, XR_DROP, { height: 0.73, front: 0.62 });
+    const inFront = desk.dist <= 0.62 - 0.04;
+    const above = desk.position.y + WORKSPACE_LOWEST >= 0.73 + SUPPORT_CLEARANCE - 1e-6;
+    expect(inFront || above, JSON.stringify(desk)).toBe(true);
+    if (inFront) expect(desk.dist).toBeLessThan(0.85);
+    expect(desk.position.x).toBeCloseTo(0);
+    // IWER home-office desk sits ~0.38 m ahead. Hang in front of the edge so a
+    // downward look can keep the timer in view without cutting through the top.
+    const close = workspacePoseFromHead(head, down, EYE, XR_DROP, { height: 0.74, front: 0.38 });
+    expect(close.dist, JSON.stringify(close)).toBeLessThanOrEqual(0.38 - 0.04);
+    expect(close.dist).toBeGreaterThanOrEqual(0.28);
+    expect(close.position.x).toBeCloseTo(head.x + close.dist * (down.x / Math.hypot(down.x, down.z)));
+    const closeHeader = workspaceLocalToWorld(close, { x: 0, y: BOARD_H / 2, z: BOARD_Z });
+    const closeTimer = workspaceLocalToWorld(close, { x: 0, y: TIMER_Y + TIMER_H / 2, z: TIMER_Z });
+    const closeBoard = workspaceLocalToWorld(close, { x: 0, y: 0, z: BOARD_Z });
+    expect(projectFromHead(head, down, closeHeader).inView).toBe(true);
+    expect(projectFromHead(head, down, closeTimer).inView).toBe(true);
+    expect(Math.abs(projectFromHead(head, down, closeBoard).ndcX)).toBeLessThan(0.05);
+    const glance = workspacePoseFromHead(head, down, EYE, XR_DROP, { height: 0.74, front: 0.15 });
+    const glanceTimer = workspaceLocalToWorld(glance, { x: 0, y: TIMER_Y + TIMER_H / 2, z: TIMER_Z });
+    expect(projectFromHead(head, down, glanceTimer).inView, JSON.stringify(glance)).toBe(true);
+    expect(glance.dist).toBeGreaterThanOrEqual(0.85);
   });
 
   it('does not restore a stale running break, but keeps a live focus and settles an expired one first', () => {
@@ -542,5 +571,74 @@ describe('review fixes', () => {
     expect(S.palmMenuShouldShow({ x: 0, y: 1, z: 0, dot: 0 })).toBe(true);
     expect(S.palmMenuShouldShow({ x: 0, y: 0.2, z: 1, dot: 0.2 })).toBe(false);
     expect(S.palmMenuShouldShow({ x: 0, y: 0.4, z: 1, dot: 0.33 }, true)).toBe(true);
+  });
+});
+
+describe('ritual, reach and hands-only fallback', () => {
+  it('carries one task and a short note into the next launch as Where you left off', () => {
+    const kv = { m: new Map<string, string>(), getItem: (k: string) => kv.m.get(k) ?? null, setItem: (k: string, v: string) => void kv.m.set(k, v) };
+    const s = S.createInitialState();
+    const later = s.cards.find(c => c.title === 'Write spec draft')!;
+    const first = s.cards.find(c => c.title === 'Reply to emails')!;
+    expect(S.cardsIn(s, 'todo')[0].id).toBe(first.id);
+    const saved = S.saveCarryOver(s, 'Open with the customer problem', later.id, 1_700_000_000_000);
+    expect(saved?.taskId).toBe(later.id);
+    expect(saved?.note).toBe('Open with the customer problem');
+    expect(later.nextStep).toBe('Open with the customer problem');
+    expect(S.cardsIn(s, 'todo')[0].id).toBe(later.id);
+    expect(S.leftOffGreeting(s)).toMatch(/Where you left off/);
+    expect(S.leftOffGreeting(s)).toMatch(/Write spec draft/);
+    S.save(s, kv, 0);
+    const loaded = S.load(kv);
+    expect(loaded.carryOver?.taskId).toBe(later.id);
+    expect(loaded.carryOver?.note).toBe('Open with the customer problem');
+    expect(S.cardsIn(loaded, 'todo')[0].id).toBe(later.id);
+    expect(S.leftOffGreeting(loaded)).toContain('Where you left off');
+    S.markCarryOverGreeted(loaded);
+    expect(S.leftOffGreeting(loaded)).toBeNull();
+    S.save(loaded, kv, 0);
+    expect(S.leftOffGreeting(S.load(kv))).toBeNull();
+    expect(S.cardsIn(S.load(kv), 'todo')[0].title).toBe('Write spec draft');
+  });
+
+  it('dims the backlog to the focus task plus the next three during quiet focus', () => {
+    const s = S.createInitialState();
+    const focus = S.addCustomCard(s, 'The one thing', 0x4f8cff, 'doing');
+    S.parkCard(s, focus.id, 1);
+    s.focusId = focus.id;
+    S.startTimer(s.timer, 0);
+    for (let i = 0; i < 5; i++) S.addCustomCard(s, `Backlog ${i}`, 0x4f8cff, 'todo');
+    expect(S.isQuietFocus(s)).toBe(true);
+    const ids = S.compactVisibleIds(s);
+    expect(ids).toBeTruthy();
+    expect(ids!.has(focus.id)).toBe(true);
+    expect(ids!.size).toBe(1 + S.COMPACT_NEXT);
+    const backlog = s.cards.filter(c => c.title.startsWith('Backlog'));
+    expect(backlog.some(c => !ids!.has(c.id))).toBe(true);
+    s.timer.running = false;
+    s.compactBoard = false;
+    expect(S.compactVisibleIds(s)).toBeNull();
+    s.compactBoard = true;
+    expect(S.compactVisibleIds(s)!.size).toBeGreaterThan(0);
+  });
+
+  it('keeps desk stands, the dock and a compact board inside a 0.6 m hand reach', () => {
+    expect(S.HAND_REACH).toBeCloseTo(0.6);
+    expect(BOARD_W).toBeLessThanOrEqual(0.75);
+    const hand = { x: 0, y: -0.22, z: 0.22 };
+    for (const slot of S.DESK_SLOTS) {
+      expect(S.targetWithinReach(hand, slot), JSON.stringify(slot)).toBe(true);
+    }
+    expect(S.targetWithinReach(hand, { x: DOCK_X, y: DOCK_Y, z: DOCK_Z })).toBe(true);
+    expect(S.targetWithinReach(hand, { x: 0, y: 0, z: 0 })).toBe(true);
+  });
+
+  it('gives a hands-only path when the microphone or network is missing', () => {
+    expect(S.voiceFallbackHint('mic')).toMatch(/permission denied/i);
+    expect(S.voiceFallbackHint('mic')).toMatch(/Pinch a task|Capture & desk/i);
+    expect(S.voiceFallbackHint('network')).toMatch(/network/i);
+    expect(S.voiceFallbackHint('network')).toMatch(/Pinch a task|Capture & desk/i);
+    expect(S.voiceFallbackHint('unavailable')).toMatch(/hands/i);
+    expect(S.voiceFallbackHint('unavailable')).not.toMatch(/only.*voice|voice is required/i);
   });
 });

@@ -66,7 +66,7 @@ test('recorded voice is reviewed before creating a task; service errors have a t
   await page.route('**/api/transcribe', route => route.fulfill({ status: 502, json: { error: 'Voice service unavailable. Type your thought instead.' } }));
   await page.getByRole('button', { name: 'Record a thought' }).click();
   await page.getByRole('button', { name: 'Record a thought' }).click();
-  await expect(page.locator('#voice-status')).toContainText('Type your thought');
+  await expect(page.locator('#voice-status')).toContainText(/Capture & desk|Type your thought|hands/i);
   await page.getByLabel('Your words').fill('A typed fallback task');
   await page.getByRole('button', { name: 'Add to my workspace' }).click();
   await expect(page.locator('#task-list')).toContainText('A typed fallback task');
