@@ -42,6 +42,10 @@ export const CARD_W = 0.2;
 export const CARD_H = 0.06;
 export const CARD_SP = 0.068;
 export const CARD_TOP = 0.07;
+/** “+N more” sits below the column header and above the first card. */
+export const MORE_Y = 0.14;
+export const MORE_H = 0.04;
+export const MORE_W = 0.14;
 
 export function comfortLimit(z: number) {
   return (EYE - z) * Math.tan(COMFORT_RAD);

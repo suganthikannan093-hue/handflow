@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.js';
 import * as S from './state';
-import { BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COL_W, COLUMN_PAGE, DESKTOP_CAM_Z, DOCK_Y, DOCK_Z, EYE, EYE_DROP, PLANT_X, PLANT_Y, PLANT_Z, TIMER_H, TIMER_W, TIMER_Y, TIMER_Z } from './layout';
+import { BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COL_W, COLUMN_PAGE, DESKTOP_CAM_Z, DOCK_Y, DOCK_Z, EYE, EYE_DROP, MORE_H, MORE_W, MORE_Y, PLANT_X, PLANT_Y, PLANT_Z, TIMER_H, TIMER_W, TIMER_Y, TIMER_Z } from './layout';
 import { Panel, button, roundRect, text, hex, ellipsize, paintLines, measuredWidth } from './ui';
 import { sfx, unlockAudio, setAmbient } from './audio';
 import { Plant } from './plant';
@@ -123,6 +123,15 @@ function showCard(card: S.Card) {
   const i = S.cardsIn(state, card.column).findIndex(c => c.id === card.id);
   if (i >= 0) colPage[card.column] = Math.floor(i / COLUMN_PAGE);
 }
+function cardDrawSig(card: S.Card, hover: boolean) {
+  return `${card.title}|${card.column}|${card.nextStep || ''}|${card.parked ?? ''}|${hover}|${theme.contrast}`;
+}
+function redrawCard(it: Item, card: S.Card) {
+  const sig = cardDrawSig(card, it.panel.hover);
+  if (it.obj.userData.drawSig === sig) return;
+  it.obj.userData.drawSig = sig;
+  it.panel.redraw();
+}
 function layoutCards(animate = true) {
   lastFocusSignature = '';
   const shown = new Set<string>();
@@ -134,10 +143,12 @@ function layoutCards(animate = true) {
     const more = moreBtns.get(col);
     if (more) {
       more.obj.visible = win.hidden > 0;
+      more.obj.position.set(colX(col), MORE_Y, 0.008);
       const label = `+${win.hidden} more`;
-      if (more.name !== label) {
+      if (more.obj.userData.moreLabel !== label) {
+        more.obj.userData.moreLabel = label;
         more.name = `button:more:${col}`;
-        more.panel.draw = button(label, 0.14, 0.034, COL_COLOR[col]).draw;
+        more.panel.draw = button(label, MORE_W, MORE_H, COL_COLOR[col]).draw;
         more.panel.redraw();
       }
     }
@@ -160,24 +171,24 @@ function layoutCards(animate = true) {
       it.obj.visible = true;
       it.obj.position.set(slot.x, slot.y, slot.z);
       it.obj.rotation.set(S.DESK_TILT, 0, 0);
-      it.panel.redraw();
+      redrawCard(it, card);
       continue;
     }
     const held = cardHeld(card.id);
     if (!shown.has(card.id) && !held) {
       it.obj.visible = false;
       delete it.obj.userData.target;
-      it.panel.redraw();
+      redrawCard(it, card);
       continue;
     }
     it.obj.visible = true;
-    if (held) { delete it.obj.userData.target; it.panel.redraw(); continue; }
+    if (held) { delete it.obj.userData.target; redrawCard(it, card); continue; }
     if (it.obj.parent !== boardPlane) { boardPlane.attach(it.obj); it.obj.rotation.set(0, 0, 0); }
     const list = S.cardsIn(state, card.column);
     const win = S.columnWindow(list.length, colPage[card.column], COLUMN_PAGE);
     const i = list.findIndex(c => c.id === card.id) - win.start;
     it.obj.userData.target = new THREE.Vector3(colX(card.column), CARD_TOP - Math.max(0, i) * CARD_SP, 0.004);
-    it.panel.redraw();
+    redrawCard(it, card);
   }
   for (const [id, it] of cardMeshes) if (!state.cards.find(c => c.id === id)) { it.obj.removeFromParent(); items.splice(items.indexOf(it), 1); cardMeshes.delete(id); }
   board.redraw();
@@ -190,9 +201,13 @@ function paintNote(n: S.Note, g: CanvasRenderingContext2D, W: number, H: number,
   g.fillRect(6, 6, W - 12, H - 12);
   g.strokeStyle = '#3a2f00'; g.lineWidth = theme.contrast ? 8 : 3; g.strokeRect(6, 6, W - 12, H - 12);
   if (n.pinned) { g.fillStyle = '#ff4d6d'; g.beginPath(); g.arc(W / 2, 26, 10, 0, Math.PI * 2); g.fill(); }
-  const top = n.pinned ? 46 : 22;
-  const fitted = S.fitWrappedText(n.text, W - 32, H - top - 14, (sample, font) => { g.font = `700 ${font}px system-ui, sans-serif`; return measuredWidth(g, sample); }, 15, 34);
-  paintLines(g, fitted.lines, 18, top + fitted.font * 0.55, fitted.font, '#3a2f00', 700, 'left', fitted.font * 1.25);
+  const top = n.pinned ? 48 : 24;
+  const padX = 22, padBottom = 18;
+  const fitted = S.fitWrappedText(n.text, W - padX * 2, H - top - padBottom, (sample, font) => { g.font = `700 ${font}px system-ui, sans-serif`; return measuredWidth(g, sample); }, 16, 32);
+  g.save();
+  g.beginPath(); g.rect(10, top - 6, W - 20, H - top - 8); g.clip();
+  paintLines(g, fitted.lines, padX, top + fitted.font * 0.55, fitted.font, '#3a2f00', 700, 'left', fitted.font * 1.28);
+  g.restore();
 }
 function syncNotes() {
   lastFocusSignature = '';
@@ -239,8 +254,12 @@ const mkBtn = (label: string, w: number, color: number, parent: THREE.Object3D, 
   const b = button(label, w, 0.04, color, icon); b.position.set(...pos); parent.add(b);
   return reg({ obj: b, kind: 'button', panel: b, grabbable: false, onPress, name });
 };
+function popPlant() { plant.scale.setScalar(1.55); plant.userData.pop = 1.35; }
 function armFocusIfStarting(wasRunning: boolean) {
-  if (!wasRunning && state.timer.running && state.timer.mode === 'focus') state.focusId = S.singleParked(state)?.id ?? null;
+  if (!wasRunning && state.timer.running && state.timer.mode === 'focus') {
+    state.focusId = S.singleParked(state)?.id ?? null;
+    popPlant();
+  }
 }
 const TIMER_BTN_W = 0.11;
 const startBtn = mkBtn('Start', TIMER_BTN_W, 0x2fc59b, timerPanel, [-0.125, -0.048, 0.004], () => {
@@ -298,8 +317,9 @@ const trashP = new Panel(0.16, 0.04, 900, (g, W, H, hover) => {
 });
 trashP.position.set(-0.06, -0.062, 0); dock.add(trashP);
 mkBtn('Undo', 0.08, 0x8fb4ff, dock, [0.12, -0.062, 0], () => { undoLast(); }, '', 'button:undo');
+mkBtn('Menu', 0.068, 0xdfe6ff, dock, [0.205, -0.062, 0], () => toggleFallbackMenu(), '', 'button:menu');
 for (const col of S.COLUMNS) {
-  const item = mkBtn('+ more', 0.14, COL_COLOR[col], boardPlane, [colX(col), 0.17, 0.008], () => {
+  const item = mkBtn('+ more', MORE_W, COL_COLOR[col], boardPlane, [colX(col), MORE_Y, 0.008], () => {
     const win = S.columnWindow(S.cardsIn(state, col).length, colPage[col] + 1, COLUMN_PAGE);
     colPage[col] = win.page; layoutCards(); sfx.press();
   }, '', `button:more:${col}`);
@@ -309,9 +329,7 @@ for (const col of S.COLUMNS) {
 
 const plant = new Plant(); plant.position.set(PLANT_X, PLANT_Y, PLANT_Z); plant.scale.setScalar(1.35); ws.add(plant);
 function focusGrow() {
-  const t = state.timer;
-  if (!(t.running && t.mode === 'focus') || t.durationMs <= 0) return 0;
-  return Math.max(0, Math.min(1, 1 - S.timerRemaining(t, Date.now()) / t.durationMs));
+  return S.liveFocusProgress(state.timer, Date.now());
 }
 function refreshPlant() {
   const rec = state.habit.history.find(r => r.date === S.todayKey());
@@ -343,16 +361,24 @@ function updateQuietFocus() {
 
 let payoffText = '';
 let tutorialT0 = 0;
-const tut = new Panel(0.66, 0.04, 1400, (g, W, H) => {
+const coachY = 0.125;
+const tut = new Panel(0.68, 0.1, 1400, (g, W, H) => {
   roundRect(g, 0, 0, W, H, 24); g.fillStyle = theme.contrast ? '#000' : 'rgba(79,140,255,0.22)'; g.fill();
   g.strokeStyle = '#ffffff'; g.lineWidth = 4; g.stroke();
   const step = S.TUTORIAL_STEPS[state.tutorialStep];
-  const label = payoffText || (step ? `${state.tutorialStep + 1}/${S.TUTORIAL_STEPS.length}  ${step.coach}` : '');
-  text(g, label, W / 2, H / 2, 24, '#fff', 700, 'center', W - 48);
+  const stepLabel = step ? `${state.tutorialStep + 1}/${S.TUTORIAL_STEPS.length}  ${step.coach}` : '';
+  if (payoffText) text(g, payoffText, W / 2, H / 2, 24, '#fff', 700, 'center', W - 48);
+  else {
+    text(g, S.TUTORIAL_INTRO, W / 2, H * 0.32, 18, '#ffe1a8', 700, 'center', W - 130);
+    text(g, stepLabel, W / 2, H * 0.66, 22, '#fff', 700, 'center', W - 130);
+  }
 });
-const coachY = 0.125;
-tut.position.set(0, coachY, 0.012); boardPlane.add(tut);
-tut.visible = !state.onboarded;
+tut.position.set(0, 0.22, 0.018); boardPlane.add(tut);
+function syncTutorialChrome() {
+  const teaching = !state.onboarded && !payoffText;
+  tut.visible = !state.onboarded || !!payoffText;
+  skipTut.obj.visible = teaching;
+}
 function advanceTutorial(id: (typeof S.TUTORIAL_STEPS)[number]['id']) {
   if (state.onboarded || payoffText) return;
   const step = S.TUTORIAL_STEPS[state.tutorialStep];
@@ -363,14 +389,26 @@ function advanceTutorial(id: (typeof S.TUTORIAL_STEPS)[number]['id']) {
     const payoff = S.finishTutorial(state, performance.now() - tutorialT0);
     payoffText = `${payoff.message}. Your streak has started.`;
     sfx.done(); refreshPlant(); board.redraw();
-    window.setTimeout(() => { payoffText = ''; tut.visible = false; tut.redraw(); }, 4000);
+    window.setTimeout(() => { if (!payoffText) return; payoffText = ''; syncTutorialChrome(); tut.redraw(); }, 4000);
   }
   syncStandLabel();
+  syncTutorialChrome();
   tut.redraw(); persist();
 }
-function restartTutorial() {
-  state.onboarded = false; state.tutorialStep = 0; payoffText = ''; tutorialT0 = 0; tut.visible = true; tut.redraw(); syncStandLabel(); persist();
+function dismissTutorial() {
+  S.skipTutorial(state);
+  payoffText = '';
+  syncTutorialChrome();
+  tut.redraw();
+  syncStandLabel();
+  persist();
 }
+function restartTutorial() {
+  state.onboarded = false; state.tutorialStep = 0; payoffText = ''; tutorialT0 = 0; syncTutorialChrome(); tut.redraw(); syncStandLabel(); persist();
+}
+const skipTut = mkBtn('Skip', 0.07, 0x38c6e8, tut, [0.285, -0.026, 0.004], () => dismissTutorial(), '', 'button:skip-tutorial');
+tut.visible = !state.onboarded;
+skipTut.obj.visible = !state.onboarded;
 
 const modePanel = new Panel(0.4, 0.12, 1100, (g, W, H) => {
   roundRect(g, 0, 0, W, H, 24); g.fillStyle = bg(0.94); g.fill(); g.strokeStyle = '#ffe1a8'; g.lineWidth = 4; g.stroke();
@@ -391,8 +429,8 @@ const modeFocus = mkBtn('Focus', 0.07, 0x2fc59b, modePanel, [0.12, -0.04, 0.004]
 const modeDone = mkBtn('Reviewed', 0.09, 0xffb547, modePanel, [0.12, -0.04, 0.004], () => { S.completeReview(state); refreshMode(); refreshPlant(); persist(); sfx.done(); }, '', 'button:reviewed');
 function refreshMode() {
   const show = state.onboarded && state.habit.mode !== 'work';
-  modePanel.visible = show; tut.visible = !state.onboarded && !payoffText ? true : tut.visible && !state.onboarded;
-  if (state.onboarded) tut.visible = !!payoffText;
+  modePanel.visible = show;
+  syncTutorialChrome();
   modeFocus.obj.visible = state.habit.mode === 'morning';
   modeDone.obj.visible = state.habit.mode === 'winddown';
   modePanel.redraw(); board.redraw();
@@ -512,6 +550,7 @@ function syncPlaceChrome() {
   dock.position.y = desk ? -0.127 : DOCK_Y;
   trashP.position.set(desk ? -0.37 : -0.06, desk ? 0 : -0.062, 0);
   items.find(it => it.name === 'button:undo')?.obj.position.set(desk ? 0.33 : 0.12, desk ? 0 : -0.062, 0);
+  items.find(it => it.name === 'button:menu')?.obj.position.set(desk ? 0.45 : 0.205, desk ? 0 : -0.062, 0);
   board.redraw();
 }
 const gazeDot = new THREE.Mesh(new THREE.RingGeometry(0.0035, 0.0065, 18), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false }));
@@ -562,10 +601,10 @@ function placeWorkspace(point: THREE.Vector3, normal: THREE.Vector3) {
   placing = false; reticle.visible = false; rememberPose(kind); sfx.drop();
   if (kind === 'desk' && state.onboarded && state.habit.mode === 'work') {
     payoffText = 'The stands are on your desk.';
-    tut.visible = true; tut.redraw();
+    syncTutorialChrome(); tut.redraw();
     window.setTimeout(() => {
       if (payoffText !== 'The stands are on your desk.') return;
-      payoffText = ''; tut.visible = false; tut.redraw();
+      payoffText = ''; syncTutorialChrome(); tut.redraw();
     }, 3500);
   }
 }
@@ -576,13 +615,13 @@ function applyA11y() {
   dock.scale.setScalar(scale); timerPanel.scale.setScalar(scale);
   setAmbient(state.a11y.ambient);
   fpsPanel.visible = state.a11y.showFps;
-  scene.background = renderer.xr.isPresenting && currentMode === 'ar' ? null : new THREE.Color(theme.contrast ? 0x000000 : 0x0b0e1a);
+  applyEnvironment(renderer.xr.isPresenting && currentMode === 'ar' ? 'ar' : 'desktop');
   refreshSettings(); redrawAll();
 }
 function redrawAll() {
   board.redraw(); timerPanel.redraw(); preview.redraw(); tut.redraw(); modePanel.redraw(); fpsPanel.redraw(); trashP.redraw(); settingsBg.redraw();
   standLabel.redraw(); if (dragHint.visible) dragHint.redraw();
-  for (const it of items) it.panel.redraw();
+  for (const it of items) { delete it.obj.userData.drawSig; it.panel.redraw(); }
 }
 
 let rec: ReturnType<typeof recognition> | null = null;
@@ -608,7 +647,7 @@ voicePanel.position.set(0, coachY + 0.015, TIMER_Z + 0.015); voicePanel.visible 
 const acceptVoice = mkBtn('Use words', 0.13, 0x2fc59b, voicePanel, [-0.15, -0.055, 0.008], () => usePendingVoice(), '', 'button:voice-accept');
 mkBtn('Cancel', 0.12, 0x9b6bff, voicePanel, [0, -0.055, 0.008], () => { discardRecording = true; capture.stop(); rec?.stop(); pendingVoice = ''; voicePanel.visible = false; voiceStatus('Voice cancelled'); refreshMode(); }, '', 'button:voice-cancel');
 mkBtn('Mic / Stop', 0.13, 0xff6b8a, voicePanel, [0.15, -0.055, 0.008], () => { void toggleMic(); }, '', 'button:voice-stop');
-function showVoicePanel() { voicePanel.visible = true; tut.visible = false; modePanel.visible = false; acceptVoice.obj.visible = !!pendingVoice; voicePanel.redraw(); }
+function showVoicePanel() { voicePanel.visible = true; tut.visible = false; skipTut.obj.visible = false; modePanel.visible = false; acceptVoice.obj.visible = !!pendingVoice; voicePanel.redraw(); }
 function gotTranscript(text: string) {
   if (discardRecording) return;
   pendingVoice = text.trim();
@@ -750,8 +789,10 @@ function pickAt(p: Pointer): Item | null {
 }
 function updatePointers(frame?: XRFrame) {
   const seen = new Set<string>(); const session = renderer.xr.getSession();
+  let sawPalm = false;
   if (session && frame) {
     mouseLatch = false;
+    if (menuHold) { poseHeldMenu(); sawPalm = true; }
     const ref = renderer.xr.getReferenceSpace();
     if (ref) for (const src of session.inputSources) {
       if (src.hand) {
@@ -766,7 +807,7 @@ function updatePointers(frame?: XRFrame) {
         p.pinchPos.copy(ja).add(jb).multiplyScalar(0.5);
         p.tip = (p.tip ?? new THREE.Vector3()).copy(jb); p.ray = null;
         p.pinching = S.pinchHeld(d, p.pinching);
-        if (src.handedness === 'left') updateHandMenu(frame, src.hand, ref);
+        if (updateHandMenu(frame, src.hand, ref)) sawPalm = true;
       } else if (src.gripSpace || src.targetRaySpace) {
         const i = [...session.inputSources].indexOf(src); const ctrl = renderer.xr.getController(i);
         const p = ptr('ctrl-' + src.handedness); seen.add(p.key);
@@ -797,6 +838,8 @@ function updatePointers(frame?: XRFrame) {
       } else p.ray.at(0.6, p.pinchPos);
     }
   }
+  if (session && frame && !menuHold && !sawPalm) { handMenu.visible = false; palmOpen = false; palmDot = -2; }
+  else if (!session && menuHold) poseHeldMenu();
   for (const [k, p] of pointers) if (!seen.has(k)) { if (p.grabbed) release(p); pointers.delete(k); cursors.get(k)?.removeFromParent(); cursors.delete(k); }
   for (const p of pointers.values()) {
     const h = p.grabbed ? p.grabbed : pickAt(p);
@@ -917,7 +960,7 @@ function release(p: Pointer) {
         if (surf === board) {
           const size = S.noteSize(state.notes.find(n => n.id === it.id)?.text ?? '');
           const pinnedCount = state.notes.filter(n => n.pinned && n.id !== it.id).length;
-          const free = S.noteSpot(BOARD_W, BOARD_H, size, pinnedBlockers(it.id!), pinnedCount);
+          const free = S.pinNotePosition(BOARD_W, BOARD_H, size, pinnedBlockers(it.id!), { x, y }, pinnedCount);
           if (free) { x = free.x; y = free.y; z = 0.012; }
           else { const spot = noteShelf(pinnedCount); x = spot.x; y = spot.y; z = spot.z; }
         }
@@ -936,20 +979,27 @@ function release(p: Pointer) {
 }
 let menuHold = false;
 let palmDot = -2;
+let palmOpen = false;
+function poseHeldMenu() {
+  camera.getWorldPosition(menuHead);
+  camera.getWorldDirection(menuDir);
+  handMenu.visible = true;
+  handMenu.position.copy(menuHead).addScaledVector(menuDir, 0.42);
+  handMenu.lookAt(menuHead);
+}
+function toggleFallbackMenu() {
+  menuHold = !menuHold;
+  if (menuHold) poseHeldMenu();
+  else { handMenu.visible = false; palmOpen = false; }
+  sfx.press();
+}
 function updateHandMenu(frame: XRFrame, hand: XRHand, ref: XRReferenceSpace) {
-  if (menuHold) {
-    camera.getWorldPosition(menuHead);
-    camera.getWorldDirection(menuDir);
-    handMenu.visible = true;
-    handMenu.position.copy(menuHead).addScaledVector(menuDir, 0.42);
-    handMenu.lookAt(menuHead);
-    return;
-  }
+  if (menuHold) { poseHeldMenu(); return true; }
   const get = frame.getJointPose?.bind(frame);
   const wrist = hand.get('wrist'), index = hand.get('index-finger-metacarpal'), pinky = hand.get('pinky-finger-metacarpal');
-  if (!get || !wrist || !index || !pinky) { handMenu.visible = false; palmDot = -2; return; }
+  if (!get || !wrist || !index || !pinky) return false;
   const w = get(wrist, ref), i = get(index, ref), k = get(pinky, ref);
-  if (!w || !i || !k) { handMenu.visible = false; palmDot = -2; return; }
+  if (!w || !i || !k) return false;
   const wristP = w.transform.position, indexP = i.transform.position, pinkyP = k.transform.position;
   camera.getWorldPosition(menuHead);
   const aim = S.palmAim(
@@ -958,10 +1008,11 @@ function updateHandMenu(frame: XRFrame, hand: XRHand, ref: XRReferenceSpace) {
     { x: pinkyP.x, y: pinkyP.y, z: pinkyP.z },
     { x: menuHead.x, y: menuHead.y, z: menuHead.z },
   );
-  palmDot = aim ? aim.dot : -2;
-  const show = palmDot > 0.55;
-  handMenu.visible = show;
-  if (show && aim) {
+  if (aim) palmDot = Math.max(palmDot, aim.dot);
+  if (!S.palmMenuShouldShow(aim, palmOpen)) return false;
+  palmOpen = true;
+  handMenu.visible = true;
+  if (aim) {
     menuN.set(aim.x, aim.y, aim.z);
     menuHead.set(wristP.x, wristP.y, wristP.z);
     handMenu.position.copy(menuHead).addScaledVector(menuN, 0.08);
@@ -969,6 +1020,7 @@ function updateHandMenu(frame: XRFrame, hand: XRHand, ref: XRReferenceSpace) {
     camera.getWorldPosition(menuDir);
     handMenu.lookAt(menuDir);
   }
+  return true;
 }
 
 let dwellId: string | null = null, dwellElapsed = 0;
@@ -1020,6 +1072,8 @@ function applyEnvironment(mode: 'ar' | 'vr' | 'desktop') {
   scene.background = ar ? null : new THREE.Color(theme.contrast ? 0x000000 : 0x0b0e1a);
   scene.fog = ar ? null : new THREE.Fog(theme.contrast ? 0x000000 : 0x0b0e1a, 4, 14);
   grid.visible = !ar; stars.visible = !ar; ring.visible = !ar;
+  renderer.setClearColor(0x000000, ar ? 0 : 1);
+  renderer.setClearAlpha(ar ? 0 : 1);
 }
 function parkDesktop() {
   camera.rotation.set(0, 0, 0);
@@ -1049,10 +1103,10 @@ async function beginSession(prefer: 'ar' | 'vr') {
     try {
       if (await navigator.xr.isSessionSupported('immersive-ar')) {
         session = await navigator.xr.requestSession('immersive-ar', {
-          requiredFeatures: ['local-floor'],
+          // local-floor is optional so a missing feature does not fall back to VR (and a starfield).
           // depth-sensing is omitted on purpose. The emulator implements it by
           // calling readPixels on a depth target every frame, which stalls the GPU.
-          optionalFeatures: ['hand-tracking', 'hit-test', 'plane-detection', 'anchors', 'dom-overlay', 'light-estimation'],
+          optionalFeatures: ['local-floor', 'hand-tracking', 'hit-test', 'plane-detection', 'anchors', 'dom-overlay', 'light-estimation'],
         });
         mode = 'ar';
       }
@@ -1068,6 +1122,10 @@ async function beginSession(prefer: 'ar' | 'vr') {
   renderer.xr.setFramebufferScaleFactor(1);
   (renderer.xr as THREE.WebXRManager & { setFoveation?: (n: number) => void }).setFoveation?.(1);
   await renderer.xr.setSession(session);
+  applyEnvironment(mode);
+  if (prefer === 'ar' && mode !== 'ar') {
+    status.textContent = 'Mixed reality was unavailable, so this session opened in VR. On a Quest or with ?emulate, Enter MR should show passthrough instead of the starfield.';
+  }
   try { await (session as XRSession & { updateTargetFrameRate?: (n: number) => Promise<void> }).updateTargetFrameRate?.(72); } catch { /* device picks the rate */ }
   document.body.classList.add('in-xr');
   mrItem.panel.draw = button(mode === 'ar' ? 'VR' : 'MR', 0.08, 0.03, 0x38c6e8).draw; mrItem.panel.redraw();
@@ -1148,6 +1206,7 @@ const frameTimer = new THREE.Timer(); let lastSec = -1;
 renderer.setAnimationLoop((time, frame) => {
   frameTimer.update(time);
   const dt = Math.min(frameTimer.getDelta(), 0.05);
+  if (currentMode === 'ar' && (scene.background || stars.visible || grid.visible || ring.visible)) applyEnvironment('ar');
   if (!renderer.xr.isPresenting) { if (keys.has('a')) camera.rotation.y += dt; if (keys.has('d')) camera.rotation.y -= dt; gazeDot.visible = false; }
   else {
     camera.getWorldPosition(gazeDot.position);
@@ -1166,6 +1225,12 @@ renderer.setAnimationLoop((time, frame) => {
     const s = THREE.MathUtils.lerp(it.obj.scale.x, base, 1 - Math.pow(0.001, dt));
     it.obj.scale.setScalar(s);
     if (Math.abs(s - base) < 0.002) { it.obj.scale.setScalar(base); delete it.obj.userData.pop; }
+  }
+  if (plant.userData.pop != null) {
+    const base = 1.35;
+    const s = THREE.MathUtils.lerp(plant.scale.x, base, 1 - Math.pow(0.001, dt));
+    plant.scale.setScalar(s);
+    if (Math.abs(s - base) < 0.002) { plant.scale.setScalar(base); delete plant.userData.pop; }
   }
   for (const it of cardMeshes.values()) if (it.obj.scale.x < 1 && it.obj.userData.pop == null && !pointersGrab(it)) it.obj.userData.pop = it.obj.userData.baseScale ?? 1;
   const now = Date.now();
@@ -1232,15 +1297,40 @@ function registerEmulator() {
   });
 }
 
+function boardLocalToWs(x: number, y: number, z: number) {
+  board.updateWorldMatrix(true, false); ws.updateWorldMatrix(true, false);
+  return ws.worldToLocal(board.localToWorld(new THREE.Vector3(x, y, z)));
+}
+function applyPinnedPose(n: S.Note) {
+  const p = boardLocalToWs(n.pos[0], n.pos[1], 0.012);
+  const q = ws.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(board.getWorldQuaternion(new THREE.Quaternion()));
+  n.pos = [p.x, p.y, p.z];
+  n.rot = [q.x, q.y, q.z, q.w];
+}
+function seedOrRepairNotes() {
+  const blockers = S.visibleCardRects(state, COL_W, CARD_W, CARD_H, CARD_TOP, CARD_SP, COLUMN_PAGE, colPage);
+  if (!state.onboarded) {
+    for (const n of S.seedStarterNotes(state, BOARD_W, BOARD_H, blockers)) applyPinnedPose(n);
+  }
+  for (const n of state.notes) {
+    if (!n.pinned) continue;
+    const local = board.worldToLocal(ws.localToWorld(new THREE.Vector3(n.pos[0], n.pos[1], n.pos[2])));
+    n.pos = [local.x, local.y, local.z];
+  }
+  S.resolveBoardNotes(state, BOARD_W, BOARD_H, blockers);
+  for (const n of state.notes) if (n.pinned) applyPinnedPose(n);
+}
+seedOrRepairNotes();
 layoutCards(false); syncNotes(); refreshPlant(); refreshMode(); applyA11y(); registerEmulator(); paintSlots(-1); syncPlaceChrome();
+syncTutorialChrome();
 function greetDesk() {
   const waiting = S.parkedCards(state);
   if (!state.onboarded || !waiting.length || state.habit.mode !== 'work') return;
   payoffText = waiting.length === 1 ? '1 task is still on your desk' : `${waiting.length} tasks are still on your desk`;
-  tut.visible = true; tut.redraw();
+  syncTutorialChrome(); tut.redraw();
   window.setTimeout(() => {
     if (!payoffText.includes('still on your desk')) return;
-    payoffText = ''; tut.visible = false; tut.redraw();
+    payoffText = ''; syncTutorialChrome(); tut.redraw();
   }, 4000);
 }
 greetDesk();
@@ -1260,6 +1350,7 @@ async function setupXR() {
   enterBtn.textContent = ar || state.mrPreferred ? 'Enter MR' : 'Enter VR';
 }
 enterBtn.onclick = async () => { unlockAudio(); await beginSession(state.mrPreferred ? 'ar' : 'vr'); };
+document.getElementById('open-menu')?.addEventListener('click', () => { unlockAudio(); toggleFallbackMenu(); });
 addEventListener('resize', () => {
   if (!renderer.xr.isPresenting) frameDesktop();
   renderer.setSize(innerWidth, innerHeight);
@@ -1289,7 +1380,7 @@ function applySaid(said: string) {
 (window as unknown as { handflow?: unknown }).handflow = {
   state, recenter, screenOf, deskLayoutProof: () => ({ surface: state.placement?.surface, toolbarY: dock.position.y, tabletopY: -0.22, trashY: dock.position.y + trashP.position.y, standsY: S.DESK_SLOTS.map(s => s.y) }), focusProof: () => ({ quiet: board.material.opacity < 1, plantProgress: plant.focus, plantStage: plant.stage }), voiceProof: () => ({ endpoint: cloudEndpoint, pending: pendingVoice, message: voiceMessage }), fps: () => fpsValue, refresh: () => { refreshMode(); applyA11y(); },
   dictate: (text: string) => applySaid(text),
-  holdMenu: (on: boolean) => { menuHold = on; },
+  holdMenu: (on: boolean) => { menuHold = on; if (on) poseHeldMenu(); else { handMenu.visible = false; palmOpen = false; } },
   menuOpen: () => handMenu.visible,
   palmDot: () => palmDot,
   tutorialOpen: () => tut.visible && !state.onboarded,

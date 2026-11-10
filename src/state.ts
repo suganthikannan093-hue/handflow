@@ -61,6 +61,8 @@ export const TUTORIAL_STEPS = [
   { id: 'pin', coach: 'Drop the note on the board' },
   { id: 'timer', coach: 'Poke Start on the timer' },
 ] as const;
+/** First-run cue shown above the guided steps. */
+export const TUTORIAL_INTRO = 'Pinch to grab · Poke to press · Palm toward you for the menu';
 /** Pinch starts under 2cm and stays held until the fingers open past 3.5cm. */
 export const PINCH_START = 0.02;
 export const PINCH_RELEASE = 0.035;
@@ -164,10 +166,10 @@ export function pinToSurface(x: number, y: number, z: number, halfW: number, hal
 }
 
 export function noteSize(text: string) {
-  const w = 0.13;
-  const lines = Math.min(8, Math.max(2, Math.ceil(text.trim().length / 18)));
-  const h = Math.min(0.24, 0.04 + lines * 0.025);
-  return { w, h: Math.max(0.12, h) };
+  const w = 0.15;
+  const lines = Math.min(8, Math.max(2, Math.ceil(text.trim().length / 16)));
+  const h = Math.min(0.24, 0.045 + lines * 0.026);
+  return { w, h: Math.max(0.13, h) };
 }
 export function addNote(s: WorkspaceState, pos: [number, number, number], text?: string): Note {
   const n: Note = {
@@ -257,6 +259,21 @@ export function tickTimer(t: Timer, now: number) {
   t.durationMs = t.mode === 'focus' ? FOCUS_MS : BREAK_MS; resetTimer(t); return true;
 }
 export function formatMs(ms: number) { const s = Math.ceil(ms / 1000); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
+/** Visible growth while a focus block is running. A start boost makes the sprout appear immediately. */
+export const FOCUS_GROWTH_BOOST = 0.35;
+export function liveFocusProgress(t: Timer, now: number, startBoost = FOCUS_GROWTH_BOOST) {
+  if (!(t.running && t.mode === 'focus') || t.durationMs <= 0) return 0;
+  const raw = Math.max(0, Math.min(1, 1 - timerRemaining(t, now) / t.durationMs));
+  return Math.max(startBoost, raw);
+}
+/** A leftover break should not greet the next visit. Focus sessions that are still running stay put. */
+export function resetBreakToFocus(t: Timer) {
+  if (t.mode !== 'break') return false;
+  t.mode = 'focus';
+  t.durationMs = FOCUS_MS;
+  resetTimer(t);
+  return true;
+}
 
 // ---- Habits ----
 export function todayKey(now = new Date()) {
@@ -362,12 +379,68 @@ export function firstFreeSpot(boardW: number, boardH: number, size: { w: number;
 }
 /** Spots along the bottom of the board, then one row higher. Null when the note cannot sit clear of blockers. */
 export function noteSpot(boardW: number, boardH: number, size: { w: number; h: number }, blockers: Rect[], indexHint = 0) {
-  const xs = [-boardW * 0.3, 0, boardW * 0.3];
-  const baseY = -boardH / 2 + size.h / 2 + 0.02;
+  const xs = [-boardW * 0.32, -boardW * 0.16, 0, boardW * 0.16, boardW * 0.32];
+  const baseY = -boardH / 2 + size.h / 2 + 0.018;
   const candidates: { x: number; y: number }[] = [];
-  for (let row = 0; row < 2; row++) for (const x of xs) candidates.push({ x, y: baseY + row * (size.h + 0.016) });
+  for (let row = 0; row < 3; row++) for (const x of xs) candidates.push({ x, y: baseY + row * (size.h + 0.016) });
   const shift = ((indexHint % candidates.length) + candidates.length) % candidates.length;
   return firstFreeSpot(boardW, boardH, size, blockers, candidates.slice(shift).concat(candidates.slice(0, shift)));
+}
+export function noteInBoard(rect: Rect, boardW: number, boardH: number) {
+  return Math.abs(rect.x) + rect.w / 2 <= boardW / 2 - 0.012 && Math.abs(rect.y) + rect.h / 2 <= boardH / 2 - 0.012;
+}
+export function noteFits(rect: Rect, boardW: number, boardH: number, blockers: Rect[]) {
+  return noteInBoard(rect, boardW, boardH) && !blockers.some(b => rectsOverlap(rect, b));
+}
+/** Keep the drop point when it is clear of cards and other notes; otherwise pick a free spot. */
+export function pinNotePosition(boardW: number, boardH: number, size: { w: number; h: number }, blockers: Rect[], drop: { x: number; y: number }, indexHint = 0) {
+  const rect: Rect = { x: drop.x, y: drop.y, w: size.w, h: size.h };
+  if (noteFits(rect, boardW, boardH, blockers)) return drop;
+  return noteSpot(boardW, boardH, size, blockers, indexHint);
+}
+/** Visible cards on the current column page, in board-local metres. */
+export function visibleCardRects(s: WorkspaceState, colWidth: number, cardW: number, cardH: number, cardTop: number, cardSp: number, pageSize: number, page: number | Record<Column, number> = 0): Rect[] {
+  return COLUMNS.flatMap((col, i) => {
+    const list = cardsIn(s, col);
+    const p = typeof page === 'number' ? page : (page[col] ?? 0);
+    const win = columnWindow(list.length, p, pageSize);
+    return list.slice(win.start, win.start + win.visible).map((_, idx) => ({
+      x: (i - 1) * colWidth, y: cardTop - idx * cardSp, w: cardW, h: cardH,
+    }));
+  });
+}
+/** Move pinned notes that overlap cards or each other into free board space. */
+export function resolveBoardNotes(s: WorkspaceState, boardW: number, boardH: number, cardBlockers: Rect[]) {
+  const placed: Rect[] = [];
+  for (const n of s.notes) {
+    if (!n.pinned) continue;
+    const size = noteSize(n.text);
+    const rect: Rect = { x: n.pos[0], y: n.pos[1], w: size.w, h: size.h };
+    const blockers = cardBlockers.concat(placed);
+    if (noteFits(rect, boardW, boardH, blockers)) { placed.push(rect); continue; }
+    const free = noteSpot(boardW, boardH, size, blockers, placed.length);
+    if (!free) continue;
+    n.pos = [free.x, free.y, n.pos[2]];
+    placed.push({ x: free.x, y: free.y, w: size.w, h: size.h });
+  }
+  return s;
+}
+export const STARTER_NOTES = ['Idea: batch meetings', 'Remember: hydrate'] as const;
+/** First-run notes sit in free board space so they never cover the Doing cards. */
+export function seedStarterNotes(s: WorkspaceState, boardW: number, boardH: number, cardBlockers: Rect[]) {
+  if (s.notes.length) return [] as Note[];
+  const created: Note[] = [];
+  const blockers = cardBlockers.slice();
+  STARTER_NOTES.forEach((text, i) => {
+    const size = noteSize(text);
+    const spot = noteSpot(boardW, boardH, size, blockers, i);
+    if (!spot) return;
+    const n = addNote(s, [spot.x, spot.y, 0.012], text);
+    n.pinned = true;
+    blockers.push({ x: spot.x, y: spot.y, w: size.w, h: size.h });
+    created.push(n);
+  });
+  return created;
 }
 /** Page a column so only `pageSize` cards are on the board. `hidden` is the "+N more" count. */
 export function columnWindow(count: number, page: number, pageSize: number) {
@@ -405,6 +478,13 @@ export function palmFacesViewer(
   const aim = palmAim(wrist, indexMeta, pinkyMeta, viewer);
   return !!aim && aim.dot > minDot;
 }
+/** Open when the palm faces the viewer or is turned palm-up. `open` loosens the thresholds so the menu does not flicker. */
+export const PALM_VIEW_DOT = 0.45;
+export const PALM_UP_Y = 0.5;
+export function palmMenuShouldShow(aim: { x: number; y: number; z: number; dot: number } | null, open = false) {
+  if (!aim) return false;
+  return aim.dot > (open ? 0.32 : PALM_VIEW_DOT) || aim.y > (open ? 0.35 : PALM_UP_Y);
+}
 export interface BoardSnap { cards: Card[]; notes: Note[]; focusId: string | null; habit: Habit }
 export function captureBoard(s: WorkspaceState): BoardSnap {
   return JSON.parse(JSON.stringify({ cards: s.cards, notes: s.notes, focusId: s.focusId, habit: s.habit }));
@@ -416,6 +496,10 @@ export function finishTutorial(s: WorkspaceState, elapsedMs: number, now = new D
   s.onboarded = true; s.tutorialStep = TUTORIAL_STEPS.length;
   if (s.habit.streak === 0) { ensureToday(s.habit, now); s.habit.streak = 1; }
   return tutorialPayoff(elapsedMs);
+}
+/** Dismiss first-run coaching without treating it as a completed lesson. */
+export function skipTutorial(s: WorkspaceState) {
+  s.onboarded = true; s.tutorialStep = TUTORIAL_STEPS.length;
 }
 
 export type AgentKind = 'cue' | 'plan' | 'card' | 'note' | 'empty' | 'focus' | 'park' | 'done' | 'winddown' | 'reviewed' | 'status';
@@ -551,6 +635,8 @@ function hydrate(s: WorkspaceState): WorkspaceState {
       if (s.timer.remainingMs <= 0) advanceWorkspaceTimer(s, Date.now());
     }
   }
+  // A leftover or just-settled break should not greet the next visit as a running 03:43 break.
+  resetBreakToFocus(s.timer);
   const used = new Set<number>();
   for (const c of s.cards) {
     const slot = c.parked;

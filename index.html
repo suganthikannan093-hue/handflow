@@ -10,18 +10,20 @@ h1{margin:0 52px 0 0;font-size:16px}p{margin:2px 0 0;font-size:12px;opacity:.85}
 #hud-close{position:absolute;top:8px;right:8px;background:transparent;color:#dfe6ff;font-size:13px;padding:4px 8px}
 #hud.compact h1,#hud.compact p{display:none}
 #hud.compact{padding:8px 10px}
-body.in-xr #hud,body.in-xr #open-companion{display:none}
+body.in-xr #hud,body.in-xr #open-companion,body.in-xr #open-menu{display:none}
 button,input,select,textarea{font:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid #ffcf74;outline-offset:3px}
-#open-companion{position:fixed;right:12px;top:12px;border:1px solid #8da3d0;border-radius:12px;padding:10px 14px;background:#19233b;color:#fff;font-weight:700;z-index:2}
+#open-companion,#open-menu{position:fixed;right:12px;border:1px solid #8da3d0;border-radius:12px;padding:10px 14px;background:#19233b;color:#fff;font-weight:700;z-index:2}
+#open-companion{top:12px}#open-menu{top:56px}
 #companion{box-sizing:border-box;width:min(580px,calc(100vw - 24px));max-height:calc(100dvh - 32px);padding:24px;border:1px solid #6f8baf;border-radius:22px;background:#101c2d;color:#ecf3fb;overflow:auto}
 #companion::backdrop{background:#020812bb;backdrop-filter:blur(5px)}#companion h2{font-size:26px;margin:0 0 8px}#companion h3{margin:22px 0 8px;font-size:17px}#companion p{font-size:14px;line-height:1.5;margin:8px 0;opacity:1}
 #companion button,#companion select{padding:9px 12px;border-radius:9px;border:1px solid #66809d;background:#20334c;color:#fff}#companion button.primary{background:#a8e6c4;color:#10291e;border-color:#a8e6c4;font-weight:700}#close-companion{float:right}
 #capture-form{display:grid;gap:10px;margin:20px 0}#capture-form label{font-size:14px;font-weight:600}#thought{box-sizing:border-box;resize:vertical;min-height:88px;width:100%;padding:12px;border-radius:10px;background:#091423;color:#fff;border:1px solid #66809d}#capture-kind{width:100%}
 .actions,.task-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.task-actions{margin-top:8px}#task-list article{padding:12px 0;border-bottom:1px solid #33445b}#task-list small{color:#a8e6c4}#companion .fine{font-size:12px;color:#b7c7d9}#announcement{position:fixed;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}#companion fieldset{border:1px solid #4f6681;border-radius:10px;margin-top:20px;display:flex;gap:14px;flex-wrap:wrap}#companion label{line-height:1.8}
-@media(max-width:600px){#open-companion{top:auto;bottom:16px;right:16px;font-size:13px}#companion{padding:18px}}</style></head>
+@media(max-width:600px){#open-companion{top:auto;bottom:16px;right:16px;font-size:13px}#open-menu{top:auto;bottom:16px;right:auto;left:16px;font-size:13px}#companion{padding:18px}}</style></head>
 <body><div id="app"></div><div id="hud"><button id="hud-close" type="button">Hide</button><h1>HandFlow</h1>
 <p id="hud-input"></p><button id="enter" disabled>Enter MR</button><p id="status">Checking WebXR…</p></div>
 <button id="open-companion" type="button" aria-haspopup="dialog">Capture &amp; desk</button>
+<button id="open-menu" type="button">Menu</button>
 <div id="announcement" role="status" aria-live="polite"></div>
 <dialog id="companion" aria-labelledby="companion-title"><button id="close-companion" type="button" aria-label="Close desk">Close</button>
 <h2 id="companion-title">One thing, within reach.</h2><p>Capture a thought. Give it a place. Leave yourself a way back.</p>
