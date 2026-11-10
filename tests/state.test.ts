@@ -24,6 +24,18 @@ describe('timer', () => {
     S.toggleTimer(t, 0); expect(t.running).toBe(true); S.resetTimer(t); expect(t.running).toBe(false); expect(t.remainingMs).toBe(S.FOCUS_MS);
   });
   it('completes focus -> break', () => { const t = S.createInitialState().timer; S.startTimer(t, 0); expect(S.tickTimer(t, 1000)).toBe(false); expect(S.tickTimer(t, S.FOCUS_MS)).toBe(true); expect(t.mode).toBe('break'); expect(t.completed).toBe(1); expect(t.remainingMs).toBe(S.BREAK_MS); });
+  it('counts down from a start timestamp by wall-clock elapsed time, not frame count', () => {
+    const t = S.createInitialState().timer;
+    t.durationMs = 60_000; t.remainingMs = 60_000;
+    const start = 5_000_000;
+    S.startTimer(t, start);
+    // A slow emulator might only deliver a couple of frames across 45s.
+    expect(S.timerRemaining(t, start + 16)).toBe(60_000 - 16);
+    expect(S.timerRemaining(t, start + 45_000)).toBe(15_000);
+    expect(S.tickTimer(t, start + 45_000)).toBe(false);
+    expect(S.timerRemaining(t, start + 60_000)).toBe(0);
+    expect(S.tickTimer(t, start + 60_000)).toBe(true);
+  });
   it('formats', () => { expect(S.formatMs(S.FOCUS_MS)).toBe('25:00'); expect(S.formatMs(61_001)).toBe('01:02'); });
 });
 describe('persistence', () => {
