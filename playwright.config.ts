@@ -1,5 +1,6 @@
 import { defineConfig } from '@playwright/test';
 
+/** Viewport 1280x700 matches a headed 1280x800 Chrome window after browser chrome. */
 export default defineConfig({
   testDir: 'tests/e2e',
   timeout: 180000,
@@ -9,10 +10,10 @@ export default defineConfig({
   retries: 0,
   use: {
     baseURL: 'http://127.0.0.1:5174',
-    viewport: { width: 1280, height: 800 },
+    viewport: { width: 1280, height: 700 },
     headless: true,
     launchOptions: {
-      args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
+      args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--window-size=1280,800'],
     },
   },
   webServer: {

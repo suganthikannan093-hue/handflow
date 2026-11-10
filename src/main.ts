@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.js';
 import * as S from './state';
-import { BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COACH_H, COACH_W, COACH_Y, COACH_Z, COL_W, COLUMN_PAGE, DESKTOP_CAM_Y, DESKTOP_WS_Z, DOCK_Y, DOCK_Z, DUR_GAP, DUR_H, DUR_W, DUR_Y, EYE_DROP, MORE_H, MORE_W, MORE_Y, PLANT_X, PLANT_Y, PLANT_Z, SKIP_TUT_H, SKIP_TUT_W, SKIP_TUT_X, SKIP_TUT_Y, TIMER_BTN_H, TIMER_BTN_W, TIMER_BTN_Y, TIMER_H, TIMER_W, TIMER_Y, TIMER_Z, TOAST_H, TOAST_W, TOAST_Y, TOAST_Z, BOARD_SPAN_TARGET, boardSpanAt, desktopCameraDistance, flattenForward, poseLooksUntracked, workspacePoseFromHead, type SupportSurface } from './layout';
+import { BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COACH_H, COACH_W, COACH_Y, COACH_Z, COL_W, COLUMN_PAGE, DESKTOP_CAM_Y, DESKTOP_WS_Z, DOCK_Y, DOCK_Z, DUR_GAP, DUR_H, DUR_W, DUR_Y, EYE_DROP, MORE_H, MORE_W, MORE_Y, PLANT_X, PLANT_Y, PLANT_Z, PLANT_SCALE, plantLocalX, SKIP_TUT_H, SKIP_TUT_W, SKIP_TUT_X, SKIP_TUT_Y, TIMER_BTN_H, TIMER_BTN_W, TIMER_BTN_Y, TIMER_H, TIMER_W, TIMER_Y, TIMER_Z, TOAST_H, TOAST_W, TOAST_Y, TOAST_Z, BOARD_SPAN_TARGET, boardSpanAt, desktopCameraDistance, flattenForward, poseLooksUntracked, workspacePoseFromHead, type SupportSurface } from './layout';
 import { Panel, button, roundRect, text, hex, ellipsize, paintLines, measuredWidth } from './ui';
 import { sfx, unlockAudio, setAmbient } from './audio';
 import { Plant } from './plant';
@@ -375,7 +375,7 @@ function carryToTomorrow(note = '', taskId?: string | null) {
   companion?.announce('Where you left off is saved.');
 }
 
-const plant = new Plant(); plant.position.set(PLANT_X, PLANT_Y, PLANT_Z); plant.scale.setScalar(1.35); ws.add(plant);
+const plant = new Plant(); plant.position.set(PLANT_X, PLANT_Y, PLANT_Z); plant.scale.setScalar(PLANT_SCALE); ws.add(plant);
 function focusGrow() {
   return S.liveFocusProgress(state.timer, Date.now());
 }
@@ -606,10 +606,13 @@ function syncPlaceChrome() {
   const desk = state.placement?.surface === 'desk';
   deskMat.visible = desk;
   // Keep controls above the detected tabletop. Trash/undo flank the main row.
+  // Auto in-front placement leaves the dock under the board (DOCK_Y) so the
+  // buttons do not cover cards; explicit desk placement raises them.
   dock.position.y = desk ? -0.127 : DOCK_Y;
   trashP.position.set(desk ? -0.37 : -0.06, desk ? 0 : -0.062, 0);
   items.find(it => it.name === 'button:undo')?.obj.position.set(desk ? 0.33 : 0.12, desk ? 0 : -0.062, 0);
   items.find(it => it.name === 'button:menu')?.obj.position.set(desk ? 0.45 : 0.205, desk ? 0 : -0.062, 0);
+  handleBar.position.set(0, desk ? -0.18 : -0.26, 0.16);
   board.redraw();
 }
 const gazeDot = new THREE.Mesh(new THREE.RingGeometry(0.0035, 0.0065, 18), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false }));
@@ -766,8 +769,17 @@ function applyWorkspaceInFront(head: { x: number; y: number; z: number }, look: 
   // pushes it out of a downward FOV.
   ws.scale.setScalar(userScale);
   board.scale.setScalar(scale);
+  placePlantBesideBoard(scale, surface);
   appliedSupportFront = surface?.front;
   rememberPose();
+}
+
+/** Sit the plant on the desk (or just under the board) to the right of the scaled board, never over a column. */
+function placePlantBesideBoard(boardScale: number, surface?: SupportSurface) {
+  const x = plantLocalX(boardScale);
+  let y = PLANT_Y;
+  if (surface) y = surface.height - ws.position.y + 0.01;
+  plant.position.set(x, y, PLANT_Z);
 }
 
 const proofCam = new THREE.PerspectiveCamera();
@@ -1398,7 +1410,7 @@ function applyEnvironment(mode: 'ar' | 'vr' | 'desktop') {
 function parkDesktop() {
   camera.rotation.set(0, 0, 0);
   userScale = 1;
-  ws.position.set(0, DESKTOP_CAM_Y - EYE_DROP, DESKTOP_WS_Z); ws.quaternion.identity(); ws.scale.setScalar(1); board.scale.setScalar(1);
+  ws.position.set(0, DESKTOP_CAM_Y - EYE_DROP, DESKTOP_WS_Z); ws.quaternion.identity(); ws.scale.setScalar(1); board.scale.setScalar(1); placePlantBesideBoard(1);
   frameDesktop();
 }
 async function setupHitTest(session: XRSession) {
@@ -1471,21 +1483,43 @@ async function toggleMode() {
   const session = renderer.xr.getSession();
   if (session) await session.end(); else await beginSession(next);
 }
+function poseUpY(pose: XRPose) {
+  q.set(pose.transform.orientation.x, pose.transform.orientation.y, pose.transform.orientation.z, pose.transform.orientation.w);
+  hitNormal.copy(up).applyQuaternion(q);
+  return hitNormal.y;
+}
+
 function updatePlacement(frame?: XRFrame) {
   if (!placing || !frame) { if (!placing) reticle.visible = false; return; }
   const ref = renderer.xr.getReferenceSpace(); if (!ref) return;
-  // The ray you are looking along wins. A nearer plane must not steal a desk hit.
-  let pose: XRPose | undefined;
-  if (hitSource) { const hits = frame.getHitTestResults(hitSource); if (hits.length) pose = hits[0].getPose(ref); }
-  if (!pose && frame.detectedPlanes && frame.detectedPlanes.size) {
-    const cam = camera.getWorldPosition(ja); let best: XRPose | undefined; let bestD = 1.6;
-    for (const plane of frame.detectedPlanes) {
-      const p = frame.getPose(plane.planeSpace, ref); if (!p) continue;
-      const d = jb.set(p.transform.position.x, p.transform.position.y, p.transform.position.z).distanceTo(cam);
-      if (d < bestD) { bestD = d; best = p; }
+  // Prefer a level desk/table over a wall or monitor the comfortable seated
+  // look may point at. A nearer vertical plane must not steal the place hit.
+  let horiz: XRPose | undefined;
+  let other: XRPose | undefined;
+  if (hitSource) {
+    for (const hit of frame.getHitTestResults(hitSource)) {
+      const p = hit.getPose(ref);
+      if (!p) continue;
+      if (poseUpY(p) > 0.65) { horiz = p; break; }
+      if (!other) other = p;
     }
-    if (best) pose = best;
   }
+  if (!horiz && frame.detectedPlanes && frame.detectedPlanes.size) {
+    const cam = camera.getWorldPosition(ja);
+    const dir = flattenForward(lastViewerDir.x, lastViewerDir.y, lastViewerDir.z);
+    let bestD = 1.8;
+    for (const plane of frame.detectedPlanes) {
+      const p = frame.getPose(plane.planeSpace, ref);
+      if (!p) continue;
+      if (poseUpY(p) < 0.65) continue;
+      const pos = p.transform.position;
+      const along = (pos.x - lastViewerPos.x) * dir.x + (pos.z - lastViewerPos.z) * dir.z;
+      if (along < 0.08 || along > 2.2) continue;
+      const d = jb.set(pos.x, pos.y, pos.z).distanceTo(cam);
+      if (d < bestD) { bestD = d; horiz = p; }
+    }
+  }
+  const pose = horiz ?? other;
   if (!pose) { reticle.visible = false; hitValid = false; return; }
   hitValid = true;
   hitPoint.set(pose.transform.position.x, pose.transform.position.y, pose.transform.position.z);
@@ -1774,6 +1808,18 @@ function computeWorkspaceViewProof() {
   const boardLeftNdc = projectWorldToNdc(board.localToWorld(_world.set(-BOARD_W / 2, 0, 0).clone()), cam);
   const boardRightNdc = projectWorldToNdc(board.localToWorld(_world.set(BOARD_W / 2, 0, 0).clone()), cam);
   const boardSpan = Math.abs(boardRightNdc.x - boardLeftNdc.x) / 2;
+  handleBar.updateMatrixWorld(true);
+  plant.updateMatrixWorld(true);
+  const carryObj = items.find(it => it.name === 'button:carry')?.obj;
+  carryObj?.updateMatrixWorld(true);
+  const handleNdc = projectWorldToNdc(handleBar.getWorldPosition(new THREE.Vector3()), cam);
+  const carryNdc = carryObj ? projectWorldToNdc(carryObj.getWorldPosition(new THREE.Vector3()), cam) : { x: 0, y: 0, z: 0, inView: false };
+  const plantNdc = projectWorldToNdc(plant.getWorldPosition(new THREE.Vector3()), cam);
+  const plantWorld = plant.getWorldPosition(new THREE.Vector3());
+  const plantBesideBoard = plant.position.x > (BOARD_W / 2) * board.scale.x + 0.04;
+  const lookPitchDeg = Math.atan2(-camDir.y, Math.hypot(camDir.x, camDir.z) || 1e-6) * (180 / Math.PI);
+  tut.updateMatrixWorld(true);
+  const coachNdc = projectWorldToNdc(tut.getWorldPosition(new THREE.Vector3()), cam);
   const hTan = Math.abs(cam.projectionMatrix.elements[0]) > 1e-6 ? 1 / Math.abs(cam.projectionMatrix.elements[0]) : lastHTan;
   if (Number.isFinite(hTan) && hTan > 0.2 && hTan < 8) lastHTan = hTan;
   _frustum.setFromProjectionMatrix(_proj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
@@ -1800,6 +1846,14 @@ function computeWorkspaceViewProof() {
     boardLeftNdc,
     boardRightNdc,
     boardSpan,
+    handleNdc,
+    carryNdc,
+    plantNdc,
+    plant: { x: plant.position.x, y: plant.position.y, z: plant.position.z, worldX: plantWorld.x },
+    plantBesideBoard,
+    lookPitchDeg,
+    coachNdc,
+    tutorialOpen: tut.visible,
     distance,
     horizDistance,
     scale: board.scale.x,

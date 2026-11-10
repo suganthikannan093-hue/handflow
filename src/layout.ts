@@ -42,6 +42,26 @@ export const XR_DROP = BOARD_BELOW_EYE;
 export const XR_FOV_V = Math.PI / 2;
 /** Keep content this far inside the 90° FOV (40° from the gaze centre). */
 export const XR_FOV_MARGIN = (40 * Math.PI) / 180;
+/** Comfortable seated look: this far below the eyes, at EYE metres ahead (~11°). */
+export const SEATED_LOOK_DOWN = 0.18;
+/** Max apparent board tilt / look-down we accept in the default emulator view. */
+export const MAX_ENTRY_PITCH_DEG = 20;
+
+/** Pitch in degrees, positive when looking down. */
+export function lookPitchDeg(look: { x: number; y: number; z: number }) {
+  return Math.atan2(-look.y, Math.hypot(look.x, look.z) || 1e-6) * (180 / Math.PI);
+}
+
+/** Unit look vector for a comfortable seated view (yaw along -Z by default). */
+export function seatedLookDirection(dist = EYE, down = SEATED_LOOK_DOWN) {
+  const len = Math.hypot(dist, down) || 1;
+  return { x: 0, y: -down / len, z: -dist / len };
+}
+
+/** World point a seated headset should look at, yaw-only, slight downward pitch. */
+export function seatedLookTarget(eye: { x: number; y: number; z: number }, dist = EYE, down = SEATED_LOOK_DOWN) {
+  return { x: eye.x, y: eye.y - down, z: eye.z - dist };
+}
 
 /** 25m / 5m / 1m chips on the idle Focus timer, below the digits. */
 export const DUR_W = 0.092;
@@ -69,9 +89,18 @@ export const SKIP_TUT_H = 0.042;
 export const SKIP_TUT_X = 0.185;
 export const SKIP_TUT_Y = -0.022;
 
-export const PLANT_X = -0.24;
-export const PLANT_Y = 0.3;
-export const PLANT_Z = 0.04;
+/** Gap between the scaled board's side edge and the plant pot centre. */
+export const PLANT_GAP = 0.08;
+/** Fallback X when the board has not been scaled yet (right of the Done column). */
+export const PLANT_X = BOARD_W / 2 + PLANT_GAP;
+/** Sit the pot on the desk / just under the board, not in front of a column. */
+export const PLANT_Y = -0.18;
+export const PLANT_Z = 0.08;
+export const PLANT_SCALE = 2.2;
+/** Local X so the pot stays beside the board even when the board is scaled up. */
+export function plantLocalX(boardScale = 1) {
+  return (BOARD_W / 2) * Math.max(boardScale, 1) + PLANT_GAP;
+}
 
 export const DOCK_X = 0;
 /** High enough that the Undo row stays inside a 52° desktop view. */
@@ -152,10 +181,12 @@ export function boardSpanAt(dist: number, hTan: number, width = BOARD_W) {
 
 /**
  * Place the workspace origin `dist` metres in front of the head along the
- * yaw-only forward (no lateral offset), facing the user. Drop follows the
- * look so the timer and headers stay in a typical 90° vertical FOV. When a
- * support surface is in the way, pull the board in front of the near edge
- * or raise it so the dock and board stay above the tabletop.
+ * yaw-only forward (no lateral offset), facing the user. Entry and Recenter
+ * ignore head pitch: the board sits at a fixed comfortable height below the
+ * eyes so an IWER (or seated) look-down cannot yank it close or tilt it
+ * into the camera. A desk under that pose is not used to pull the board
+ * in; the board underside is raised just enough to clear the tabletop.
+ * Grazing / side edges (front closer than XR_PULL_MIN) are ignored.
  */
 export function workspacePoseFromHead(
   head: { x: number; y: number; z: number },
@@ -166,30 +197,21 @@ export function workspacePoseFromHead(
 ) {
   const dir = flattenForward(look.x, look.y, look.z);
   let usedDist = Math.min(XR_DIST_MAX, Math.max(XR_DIST_MIN, dist));
-  let usedDrop = xrDropForLook(look, usedDist, drop, head.y);
+  // Fixed seated height — do not follow gaze pitch.
+  let usedDrop = drop;
   let support = surface;
-  if (support?.front != null && usedDist > support.front - 0.08) {
-    // Prefer hanging just in front of the near edge so a downward look can
-    // keep its FOV-aware drop without going through the tabletop (or the
-    // plant / monitor on it). A nearer grazing edge (often a side plane
-    // after a turn) is ignored so we do not raise the timer out of view.
-    const ahead = support.front - 0.1;
-    if (ahead >= XR_PULL_MIN) {
-      usedDist = Math.min(usedDist, ahead);
-      usedDrop = xrDropForLook(look, usedDist, drop, head.y);
-    } else {
-      support = undefined;
-    }
+  if (support?.front != null && support.front < XR_PULL_MIN) {
+    support = undefined;
   }
   if (support) {
-    const minY = support.height + SUPPORT_CLEARANCE;
     const overDesk = support.front == null || usedDist > support.front - 0.04;
-    const dockFits = head.y + WORKSPACE_LOWEST - minY >= 0.05;
-    const lowest = overDesk && !dockFits ? -BOARD_H / 2 : WORKSPACE_LOWEST;
-    const plannedLowest = head.y - usedDrop + lowest;
-    if (overDesk && plannedLowest < minY) {
-      const maxDrop = head.y + lowest - minY;
-      if (maxDrop >= 0.05) usedDrop = Math.min(usedDrop, maxDrop);
+    if (overDesk) {
+      // Clear the tabletop with the board underside. Dock/handle chrome is
+      // raised separately so it can sit on the desk instead of lifting the
+      // whole workspace to eye height.
+      const boardClear = support.height + 0.02 + BOARD_H / 2;
+      const maxDrop = head.y - boardClear;
+      if (maxDrop >= 0.12) usedDrop = Math.min(usedDrop, maxDrop);
     }
   }
   const position = {

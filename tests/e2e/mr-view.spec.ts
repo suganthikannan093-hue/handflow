@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 
-const SHOT_DIR = '/workspace/review-1110f';
+const SHOT_DIR = '/workspace/review-1110g';
 
 type Ndc = { x: number; y: number; z: number; inView: boolean };
 type ViewProof = {
@@ -29,6 +29,13 @@ type ViewProof = {
   horizDistance: number;
   scale: number;
   support: { height: number; front: number | null } | null;
+  handleNdc: Ndc;
+  carryNdc: Ndc;
+  plantNdc: Ndc;
+  plantBesideBoard: boolean;
+  lookPitchDeg: number;
+  coachNdc: Ndc;
+  tutorialOpen: boolean;
   frameId: number;
   frameTime: number;
   fps: number;
@@ -61,11 +68,15 @@ async function waitForSettledView(page: import('@playwright/test').Page) {
     const p = (window as unknown as { handflow: { workspaceViewProof: () => ViewProof } }).handflow.workspaceViewProof();
     if (!p.presenting || !p.wsVisible) return null;
     if (!p.inFront || !p.boardInView || !p.timerInView) return null;
-    if ((p.horizDistance ?? p.distance) < 0.25 || (p.horizDistance ?? p.distance) > 0.95) return null;
+    if ((p.horizDistance ?? p.distance) < 0.8 || (p.horizDistance ?? p.distance) > 1.05) return null;
     if (p.pendingRecenter) return null;
     if (!p.headerNdc?.inView || !p.timerNdc?.inView) return null;
+    if (Math.abs(p.timerNdc?.y ?? 2) > 0.92) return null;
     if (Math.abs(p.boardNdc?.x ?? 1) >= 0.15) return null;
     if ((p.boardSpan ?? 0) < 0.4 || (p.boardSpan ?? 0) > 0.6) return null;
+    if (Math.abs(p.lookPitchDeg ?? 90) > 20) return null;
+    if (!p.handleNdc?.inView || !p.carryNdc?.inView) return null;
+    if (!p.plantBesideBoard) return null;
     return p;
   }, null, { timeout: 8000 }).catch(async (err) => {
     const p = await page.evaluate(() => (window as unknown as { handflow: { workspaceViewProof: () => ViewProof } }).handflow.workspaceViewProof());
@@ -91,8 +102,8 @@ test('entering MR puts the board and timer in front of the camera inside the vie
   expect(first.inFront).toBe(true);
   expect(first.boardInView).toBe(true);
   expect(first.timerInView).toBe(true);
-  expect(first.horizDistance).toBeGreaterThanOrEqual(0.25);
-  expect(first.horizDistance).toBeLessThanOrEqual(0.95);
+  expect(first.horizDistance).toBeGreaterThanOrEqual(0.8);
+  expect(first.horizDistance).toBeLessThanOrEqual(1.05);
   inNdc(first.headerNdc, 'header');
   inNdc(first.timerNdc, 'timer top');
   inNdc(first.timerCenterNdc, 'timer centre');
@@ -100,7 +111,16 @@ test('entering MR puts the board and timer in front of the camera inside the vie
   expect(first.boardSpan, 'board span ' + JSON.stringify(first)).toBeGreaterThanOrEqual(0.4);
   expect(first.boardSpan, 'board span ' + JSON.stringify(first)).toBeLessThanOrEqual(0.6);
   expect(first.placing).toBe(true);
+  expect(first.lookPitchDeg, 'look pitch ' + JSON.stringify(first)).toBeLessThanOrEqual(20);
+  expect(Math.abs(first.timerNdc.y), 'timer top not clipped').toBeLessThanOrEqual(0.92);
+  inNdc(first.handleNdc, 'grab handle');
+  inNdc(first.carryNdc, 'carry to tomorrow');
+  expect(first.plantBesideBoard, JSON.stringify(first.plantNdc)).toBe(true);
+  expect(first.tutorialOpen).toBe(true);
   expect(await page.evaluate(() => (window as unknown as { handflow: { tutorialOpen: () => boolean } }).handflow.tutorialOpen())).toBe(true);
+  const headed = await page.evaluate(() => ({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio }));
+  expect(headed).toMatchObject({ w: 1280, h: 700 });
+  expect(headed.dpr).toBeCloseTo(1);
 
   await page.screenshot({ path: `${SHOT_DIR}/hf-mr-before.png` });
 
@@ -149,14 +169,18 @@ test('entering MR puts the board and timer in front of the camera inside the vie
   }).then((h) => h.jsonValue() as Promise<ViewProof>);
 
   expect(after, JSON.stringify(after)).toMatchObject({ presenting: true, inFront: true, boardInView: true, timerInView: true, wsVisible: true });
-  expect(after.horizDistance).toBeGreaterThanOrEqual(0.25);
-  expect(after.horizDistance).toBeLessThanOrEqual(0.95);
+  expect(after.horizDistance).toBeGreaterThanOrEqual(0.8);
+  expect(after.horizDistance).toBeLessThanOrEqual(1.05);
   inNdc(after.headerNdc, 'header after R');
   inNdc(after.timerNdc, 'timer after R');
   expect(Math.abs(after.boardNdc.x), 'board centre after R ' + JSON.stringify(after.boardNdc)).toBeLessThan(0.15);
   expect(after.boardSpan).toBeGreaterThanOrEqual(0.4);
   expect(after.boardSpan).toBeLessThanOrEqual(0.6);
   expect(after.toast.toLowerCase()).toContain('recenter');
+  expect(after.lookPitchDeg).toBeLessThanOrEqual(20);
+  inNdc(after.handleNdc, 'handle after R');
+  inNdc(after.carryNdc, 'carry after R');
+  expect(after.plantBesideBoard).toBe(true);
   const moved = Math.hypot(after.board.x - beforeBoard.x, after.board.z - beforeBoard.z);
   expect(moved, `board should move in front after a turn (midOffset=${midOffset} moved=${moved}) ${JSON.stringify({ beforeBoard, after: after.board, mid })}`).toBeGreaterThan(0.35);
 

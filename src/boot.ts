@@ -1,3 +1,4 @@
+import { seatedLookTarget } from './layout';
 // Optional desktop emulation of a Meta Quest 3. ?emulate loads hands plus a synthetic
 // home office, which is what makes passthrough, hit-testing and anchors observable here.
 async function boot() {
@@ -45,8 +46,11 @@ function aimAtDesk(d: AimedDevice) {
   if (!desk) return;
   const p = desk.transform.position;
   d.position.set(p.x, 1.15, p.z + 0.72);
-  // Offset from the centre so the ray meets wood, not the monitor.
-  lookAlongMinusZ(d.quaternion, d.position.x, d.position.y, d.position.z, p.x + 0.22, p.y, p.z + 0.16);
+  // Look slightly down (~11°) at a point 0.9 m ahead, not at the tabletop
+  // (~35°). A steep look-down makes a vertical board appear strongly tilted
+  // and cuts the FOCUS panel off the top of a 90° FOV.
+  const target = seatedLookTarget({ x: d.position.x, y: d.position.y, z: d.position.z });
+  lookAlongMinusZ(d.quaternion, d.position.x, d.position.y, d.position.z, target.x, target.y, target.z);
 }
 
 /** Quaternion that turns IWER's forward axis (0, 0, -1) toward a world point. */
