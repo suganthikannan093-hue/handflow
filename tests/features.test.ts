@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as S from '../src/state';
-import { fitsComfort, BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COACH_H, COACH_Y, COL_W, COLUMN_PAGE, DESKTOP_CAM_Y, DESKTOP_FOV, DESKTOP_WS_Z, DOCK_Y, DOCK_Z, DOCK_HALF, DUR_GAP, DUR_H, DUR_W, DUR_Y, EYE, EYE_DROP, MORE_H, MORE_Y, SKIP_TUT_H, SKIP_TUT_W, TIMER_BTN_H, TIMER_BTN_Y, TIMER_H, TIMER_Y, TIMER_Z, TIMER_W, TOAST_H, TOAST_Y, PLANT_X, XR_DROP, desktopCameraDistance, panelYFromCanvas, poseLooksUntracked, workspacePoseFromHead } from '../src/layout';
+import { fitsComfort, BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COACH_H, COACH_Y, COL_W, COLUMN_PAGE, DESKTOP_CAM_Y, DESKTOP_FOV, DESKTOP_WS_Z, DOCK_Y, DOCK_Z, DOCK_HALF, DUR_GAP, DUR_H, DUR_W, DUR_Y, EYE, EYE_DROP, MORE_H, MORE_Y, SKIP_TUT_H, SKIP_TUT_W, TIMER_BTN_H, TIMER_BTN_Y, TIMER_H, TIMER_Y, TIMER_Z, TIMER_W, TOAST_H, TOAST_Y, PLANT_X, XR_DROP, desktopCameraDistance, panelYFromCanvas, poseLooksUntracked, projectFromHead, workspaceLocalToWorld, workspacePoseFromHead } from '../src/layout';
 
 const day = (y: number, m: number, d: number) => new Date(y, m - 1, d, 9, 0, 0);
 
@@ -400,12 +400,14 @@ describe('review fixes', () => {
     expect(DUR_GAP).toBeGreaterThan(DUR_W);
   });
 
-  it('places the workspace 0.6-0.8 m in front of a seated head and rejects an untracked identity pose', () => {
+  it('places the workspace 0.9-1.1 m in front of a seated head and rejects an untracked identity pose', () => {
     const pose = workspacePoseFromHead({ x: 0, y: 1.35, z: 0 }, { x: 0, y: 0, z: -1 });
-    expect(pose.dist).toBeGreaterThanOrEqual(0.6);
-    expect(pose.dist).toBeLessThanOrEqual(0.8);
+    expect(pose.dist).toBeGreaterThanOrEqual(0.9);
+    expect(pose.dist).toBeLessThanOrEqual(1.1);
     expect(pose.position.z).toBeCloseTo(-EYE);
     expect(pose.position.y).toBeCloseTo(1.35 - XR_DROP);
+    expect(1.35 - pose.position.y).toBeGreaterThanOrEqual(0.15);
+    expect(1.35 - pose.position.y).toBeLessThanOrEqual(0.25);
     expect(pose.facing.z).toBeCloseTo(1);
     expect(poseLooksUntracked({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0, w: 1 })).toBe(true);
     expect(poseLooksUntracked({ x: 0, y: 1.35, z: 0 }, { x: 0, y: 0, z: 0, w: 1 })).toBe(false);
@@ -413,22 +415,35 @@ describe('review fixes', () => {
     const dx = turned.position.x - 1, dz = turned.position.z - 2;
     expect(Math.hypot(dx, dz)).toBeCloseTo(EYE);
     expect(dx * 0.8 + dz * 0.2).toBeGreaterThan(0);
-    const angleTo = (head: { x: number; y: number; z: number }, look: { x: number; y: number; z: number }, point: { x: number; y: number; z: number }) => {
-      const vx = point.x - head.x, vy = point.y - head.y, vz = point.z - head.z;
-      const ln = Math.hypot(look.x, look.y, look.z), pn = Math.hypot(vx, vy, vz);
-      return Math.acos(Math.min(1, Math.max(-1, (vx * look.x + vy * look.y + vz * look.z) / (ln * pn)))) * 180 / Math.PI;
+    const content = (head: { x: number; y: number; z: number }, look: { x: number; y: number; z: number }) => {
+      const seated = workspacePoseFromHead(head, look);
+      const header = workspaceLocalToWorld(seated, { x: 0, y: BOARD_H / 2, z: BOARD_Z });
+      const timerTop = workspaceLocalToWorld(seated, { x: 0, y: TIMER_Y + TIMER_H / 2, z: TIMER_Z });
+      const board = workspaceLocalToWorld(seated, { x: 0, y: 0, z: BOARD_Z });
+      return {
+        seated,
+        header: projectFromHead(head, look, header),
+        timerTop: projectFromHead(head, look, timerTop),
+        board: projectFromHead(head, look, board),
+      };
     };
     const head = { x: 0, y: 1.15, z: 0 };
     const down = { x: 0.30, y: -0.58, z: -0.76 };
-    const seated = workspacePoseFromHead(head, down);
-    const boardPt = { x: seated.position.x, y: seated.position.y, z: seated.position.z };
-    const timerPt = { x: seated.position.x, y: seated.position.y + TIMER_Y, z: seated.position.z + TIMER_Z };
-    expect(angleTo(head, down, boardPt)).toBeLessThan(45);
-    expect(angleTo(head, down, timerPt)).toBeLessThan(48);
+    const seated = content(head, down);
+    expect(seated.header.inView, JSON.stringify(seated.header)).toBe(true);
+    expect(seated.timerTop.inView, JSON.stringify(seated.timerTop)).toBe(true);
+    expect(Math.abs(seated.header.ndcY)).toBeLessThanOrEqual(1);
+    expect(Math.abs(seated.timerTop.ndcY)).toBeLessThanOrEqual(1);
     const ahead = { x: 0, y: 0, z: -1 };
-    const flat = workspacePoseFromHead(head, ahead);
-    expect(angleTo(head, ahead, { x: flat.position.x, y: flat.position.y, z: flat.position.z })).toBeLessThan(45);
-    expect(angleTo(head, ahead, { x: flat.position.x, y: flat.position.y + TIMER_Y, z: flat.position.z + TIMER_Z })).toBeLessThan(45);
+    const flat = content(head, ahead);
+    expect(flat.seated.drop).toBeCloseTo(XR_DROP);
+    expect(flat.header.inView).toBe(true);
+    expect(flat.timerTop.inView).toBe(true);
+    expect(Math.abs(flat.timerTop.ndcY)).toBeLessThan(1);
+    // A steeper desk look, like IWER sitting over a lower table, must still keep both in a 90° FOV.
+    const steep = content(head, { x: 0.2, y: -0.75, z: -0.63 });
+    expect(steep.header.inView, JSON.stringify(steep.header)).toBe(true);
+    expect(steep.timerTop.inView, JSON.stringify(steep.timerTop)).toBe(true);
   });
 
   it('does not restore a stale running break, but keeps a live focus and settles an expired one first', () => {

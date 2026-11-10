@@ -30,7 +30,7 @@ test('emulated pinches create a card, drag it, pin a note, and run the timer', a
 
   const drag = await sequence(page, [
     { label: 'grab', target: 'card:Reply to emails', anchor: 'grasp', pinch: { value: 1, at: 'arrival' } },
-    { label: 'carry', target: 'column:doing', anchor: 'grasp', pinch: 1 },
+    { label: 'carry', target: 'column:doing', anchor: 'grasp', pinch: 1, depart: { distance: 0.08 }, approach: { distance: 0.08 } },
     { label: 'drop', duration: 0.35, pinch: 0 },
   ]);
   expect(drag.cards.find(c => c.title === 'Reply to emails')?.column, JSON.stringify(drag)).toBe('doing');
