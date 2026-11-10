@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 
-const SHOT_DIR = '/workspace/review-1110e';
+const SHOT_DIR = '/workspace/review-1110f';
 
 type Ndc = { x: number; y: number; z: number; inView: boolean };
 type ViewProof = {
@@ -23,6 +23,15 @@ type ViewProof = {
   timerNdc: Ndc;
   timerCenterNdc: Ndc;
   boardNdc: Ndc;
+  boardLeftNdc: Ndc;
+  boardRightNdc: Ndc;
+  boardSpan: number;
+  horizDistance: number;
+  scale: number;
+  support: { height: number; front: number | null } | null;
+  frameId: number;
+  frameTime: number;
+  fps: number;
 };
 
 type Remote = {
@@ -52,9 +61,11 @@ async function waitForSettledView(page: import('@playwright/test').Page) {
     const p = (window as unknown as { handflow: { workspaceViewProof: () => ViewProof } }).handflow.workspaceViewProof();
     if (!p.presenting || !p.wsVisible) return null;
     if (!p.inFront || !p.boardInView || !p.timerInView) return null;
-    if (p.distance < 0.85 || p.distance > 1.25) return null;
+    if ((p.horizDistance ?? p.distance) < 0.25 || (p.horizDistance ?? p.distance) > 0.95) return null;
     if (p.pendingRecenter) return null;
     if (!p.headerNdc?.inView || !p.timerNdc?.inView) return null;
+    if (Math.abs(p.boardNdc?.x ?? 1) >= 0.15) return null;
+    if ((p.boardSpan ?? 0) < 0.4 || (p.boardSpan ?? 0) > 0.6) return null;
     return p;
   }, null, { timeout: 8000 }).catch(async (err) => {
     const p = await page.evaluate(() => (window as unknown as { handflow: { workspaceViewProof: () => ViewProof } }).handflow.workspaceViewProof());
@@ -80,15 +91,31 @@ test('entering MR puts the board and timer in front of the camera inside the vie
   expect(first.inFront).toBe(true);
   expect(first.boardInView).toBe(true);
   expect(first.timerInView).toBe(true);
-  expect(first.distance).toBeGreaterThanOrEqual(0.85);
-  expect(first.distance).toBeLessThanOrEqual(1.25);
+  expect(first.horizDistance).toBeGreaterThanOrEqual(0.25);
+  expect(first.horizDistance).toBeLessThanOrEqual(0.95);
   inNdc(first.headerNdc, 'header');
   inNdc(first.timerNdc, 'timer top');
   inNdc(first.timerCenterNdc, 'timer centre');
+  expect(Math.abs(first.boardNdc.x), 'board centre NDC x ' + JSON.stringify(first.boardNdc)).toBeLessThan(0.15);
+  expect(first.boardSpan, 'board span ' + JSON.stringify(first)).toBeGreaterThanOrEqual(0.4);
+  expect(first.boardSpan, 'board span ' + JSON.stringify(first)).toBeLessThanOrEqual(0.6);
   expect(first.placing).toBe(true);
   expect(await page.evaluate(() => (window as unknown as { handflow: { tutorialOpen: () => boolean } }).handflow.tutorialOpen())).toBe(true);
 
-  await page.screenshot({ path: `${SHOT_DIR}/hf-mr-before-recenter.png` });
+  await page.screenshot({ path: `${SHOT_DIR}/hf-mr-before.png` });
+
+  const startFrame = await page.evaluate(() => (window as unknown as { handflow: { frameProof: () => { id: number; time: number; fps: number } } }).handflow.frameProof());
+  // Drive rAF for 5s so a headless compositor cannot go idle and look frozen.
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    const t0 = performance.now();
+    const tick = (now: number) => { if (now - t0 >= 5000) resolve(); else requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+    setTimeout(() => resolve(), 5500);
+  }));
+  const laterFrame = await page.evaluate(() => (window as unknown as { handflow: { frameProof: () => { id: number; time: number; fps: number } } }).handflow.frameProof());
+  expect(laterFrame.id, JSON.stringify({ startFrame, laterFrame })).toBeGreaterThan(startFrame.id + 8);
+  expect(laterFrame.time - startFrame.time).toBeGreaterThan(4000);
+  await page.screenshot({ path: `${SHOT_DIR}/hf-mr-after-5s.png` });
 
   const beforeBoard = first.board;
   // Turn in place so the board is no longer in front, then recenter with R.
@@ -122,10 +149,13 @@ test('entering MR puts the board and timer in front of the camera inside the vie
   }).then((h) => h.jsonValue() as Promise<ViewProof>);
 
   expect(after, JSON.stringify(after)).toMatchObject({ presenting: true, inFront: true, boardInView: true, timerInView: true, wsVisible: true });
-  expect(after.distance).toBeGreaterThanOrEqual(0.85);
-  expect(after.distance).toBeLessThanOrEqual(1.25);
+  expect(after.horizDistance).toBeGreaterThanOrEqual(0.25);
+  expect(after.horizDistance).toBeLessThanOrEqual(0.95);
   inNdc(after.headerNdc, 'header after R');
   inNdc(after.timerNdc, 'timer after R');
+  expect(Math.abs(after.boardNdc.x), 'board centre after R ' + JSON.stringify(after.boardNdc)).toBeLessThan(0.15);
+  expect(after.boardSpan).toBeGreaterThanOrEqual(0.4);
+  expect(after.boardSpan).toBeLessThanOrEqual(0.6);
   expect(after.toast.toLowerCase()).toContain('recenter');
   const moved = Math.hypot(after.board.x - beforeBoard.x, after.board.z - beforeBoard.z);
   expect(moved, `board should move in front after a turn (midOffset=${midOffset} moved=${moved}) ${JSON.stringify({ beforeBoard, after: after.board, mid })}`).toBeGreaterThan(0.35);
@@ -134,16 +164,22 @@ test('entering MR puts the board and timer in front of the camera inside the vie
 
   // Recenter from the API as the palm-menu button does, after another in-place turn.
   // A large position jump would auto-recenter, so only change yaw.
+  const lookBeforeTurn = after.look;
   await page.evaluate(async () => {
-    const remote = (window as unknown as { __iwer: { remote: Remote } }).__iwer.remote;
-    const pose = await remote.dispatch('get_transform', { device: 'headset' }) as { position: { x: number; y: number; z: number }; euler: { yaw: number; pitch: number; roll: number } };
-    await remote.dispatch('set_transform', {
+    const w = window as unknown as { __iwer: { remote: Remote }; handflow: { nudgeViewer?: (d: number) => boolean } };
+    const pose = await w.__iwer.remote.dispatch('get_transform', { device: 'headset' }) as { position: { x: number; y: number; z: number }; euler: { yaw: number; pitch: number; roll: number } };
+    await w.__iwer.remote.dispatch('set_transform', {
       device: 'headset',
       position: pose.position,
       orientation: { yaw: pose.euler.yaw - 70, pitch: pose.euler.pitch, roll: pose.euler.roll },
     });
+    w.handflow.nudgeViewer?.(-70);
   });
-  await page.waitForTimeout(300);
+  await page.waitForFunction((prev) => {
+    const p = (window as unknown as { handflow: { workspaceViewProof: () => ViewProof } }).handflow.workspaceViewProof();
+    const dot = (p.look?.x ?? 0) * prev.x + (p.look?.y ?? 0) * prev.y + (p.look?.z ?? 0) * prev.z;
+    return dot < 0.9;
+  }, lookBeforeTurn, { timeout: 6000 }).catch(() => null);
   const beforeMenu = await page.evaluate(() => (window as unknown as { handflow: { workspaceViewProof: () => ViewProof } }).handflow.workspaceViewProof());
   await page.evaluate(() => (window as unknown as { handflow: { recenter: () => void } }).handflow.recenter());
   const afterMenu = await page.waitForFunction((prev) => {
@@ -154,13 +190,14 @@ test('entering MR puts the board and timer in front of the camera inside the vie
     if (moved < 0.2) return null;
     if (!p.toast || !p.toast.toLowerCase().includes('recenter')) return null;
     return p;
-  }, beforeMenu.board, { timeout: 8000 }).catch(async (err) => {
+  }, after.board, { timeout: 8000 }).catch(async (err) => {
     const p = await page.evaluate(() => (window as unknown as { handflow: { workspaceViewProof: () => ViewProof } }).handflow.workspaceViewProof());
-    throw new Error(`${String(err)}\n${JSON.stringify({ p, beforeMenu })}`);
+    throw new Error(`${String(err)}\n${JSON.stringify({ p, beforeMenu, from: after.board })}`);
   }).then((h) => h.jsonValue() as Promise<ViewProof>);
 
   inNdc(afterMenu.headerNdc, 'header after menu recenter');
   inNdc(afterMenu.timerNdc, 'timer after menu recenter');
+  expect(Math.abs(afterMenu.boardNdc.x), 'board centre after menu ' + JSON.stringify(afterMenu.boardNdc)).toBeLessThan(0.22);
   await page.screenshot({ path: `${SHOT_DIR}/hf-mr-after-recenter-menu.png` });
   expect(errors, errors.join('\n')).toEqual([]);
 });

@@ -15,6 +15,13 @@ async function boot() {
       try {
         await d.sem?.loadDefaultEnvironment('home_office');
         aimAtDesk(d);
+        const sem = d.sem as { render?: (time: number) => void } | undefined;
+        if (sem && typeof sem.render === 'function') {
+          const raw = sem.render.bind(sem);
+          sem.render = (time: number) => {
+            try { raw(time); } catch (err) { console.warn('Emulated room render failed', err); }
+          };
+        }
       } catch (err) {
         console.warn('HandFlow could not load the emulated room', err);
       }
