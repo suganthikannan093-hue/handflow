@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { XRHandModelFactory } from 'three/examples/jsm/webxr/XRHandModelFactory.js';
 import * as S from './state';
-import { BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COL_W, COLUMN_PAGE, DESKTOP_CAM_Z, DOCK_Y, DOCK_Z, EYE, EYE_DROP, MORE_H, MORE_W, MORE_Y, PLANT_X, PLANT_Y, PLANT_Z, TIMER_H, TIMER_W, TIMER_Y, TIMER_Z } from './layout';
+import { BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COACH_H, COACH_W, COACH_Y, COACH_Z, COL_W, COLUMN_PAGE, DESKTOP_CAM_Y, DESKTOP_WS_Z, DOCK_Y, DOCK_Z, DUR_GAP, DUR_H, DUR_W, DUR_Y, EYE_DROP, MORE_H, MORE_W, MORE_Y, PLANT_X, PLANT_Y, PLANT_Z, SKIP_TUT_H, SKIP_TUT_W, SKIP_TUT_X, SKIP_TUT_Y, TIMER_BTN_H, TIMER_BTN_W, TIMER_BTN_Y, TIMER_H, TIMER_W, TIMER_Y, TIMER_Z, TOAST_H, TOAST_W, TOAST_Y, TOAST_Z, desktopCameraDistance, poseLooksUntracked, workspacePoseFromHead } from './layout';
 import { Panel, button, roundRect, text, hex, ellipsize, paintLines, measuredWidth } from './ui';
 import { sfx, unlockAudio, setAmbient } from './audio';
 import { Plant } from './plant';
@@ -38,12 +38,11 @@ scene.background = new THREE.Color(0x0b0e1a);
 scene.fog = new THREE.Fog(0x0b0e1a, 4, 14);
 const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.01, 50);
 function frameDesktop() {
-  // Wide windows use DESKTOP_CAM_Z. A phone is narrower than the board, so step back until the board fits.
+  // Step back until the board width, the raised timer, and the dock all fit a 52° view.
   const aspect = Math.max(innerWidth, 1) / Math.max(innerHeight, 1);
-  const vTan = Math.tan((52 * Math.PI) / 360);
-  const boardZ = -0.55 + BOARD_Z;
-  const dist = Math.max(DESKTOP_CAM_Z - boardZ, (BOARD_W / 2 + 0.06) / (vTan * aspect));
-  camera.position.set(0, 1.2, boardZ + dist);
+  const boardZ = DESKTOP_WS_Z + BOARD_Z;
+  const dist = desktopCameraDistance(aspect);
+  camera.position.set(0, DESKTOP_CAM_Y, boardZ + dist);
   camera.aspect = aspect;
   camera.updateProjectionMatrix();
 }
@@ -56,7 +55,7 @@ ring.rotation.x = -Math.PI / 2; ring.position.y = 0.005; scene.add(ring);
 const stars = new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(Array.from({ length: 600 }, () => (Math.random() - 0.5) * 30), 3)), new THREE.PointsMaterial({ color: 0x8899ff, size: 0.03 }));
 scene.add(stars);
 
-const ws = new THREE.Group(); scene.add(ws); ws.position.set(0, 1.2 - EYE_DROP, -0.55);
+const ws = new THREE.Group(); scene.add(ws); ws.position.set(0, DESKTOP_CAM_Y - EYE_DROP, DESKTOP_WS_Z);
 
 type Kind = 'card' | 'note' | 'button';
 interface Item { obj: THREE.Object3D; kind: Kind; id?: string; name?: string; onPress?: () => void; panel: Panel; grabbable: boolean }
@@ -243,9 +242,9 @@ const timerPanel = new Panel(TIMER_W, TIMER_H, 1200, (g, W, H) => {
   const focusLabel = focus ? ellipsize(g, focus.title, W - 120) : (t.mode === 'focus' ? 'FOCUS' : 'BREAK');
   text(g, focusLabel, 24, 32, focus ? 22 : 26, t.mode === 'focus' ? '#ff9db0' : '#8fe8c8', 800);
   text(g, t.mode === 'focus' && t.durationMs !== S.FOCUS_MS ? `${Math.round(t.durationMs / 60000)}m focus` : `${t.completed} done`, W - 20, 32, 20, '#fff', 700, 'right');
-  text(g, S.formatMs(rem), W / 2, H * 0.44, 64, '#fff', 800, 'center');
-  g.fillStyle = theme.contrast ? '#333' : 'rgba(255,255,255,.15)'; roundRect(g, 18, H * 0.68, W - 36, 10, 5); g.fill();
-  g.fillStyle = t.mode === 'focus' ? '#ff6b8a' : '#2fc59b'; roundRect(g, 18, H * 0.68, Math.max(10, (W - 36) * frac), 10, 5); g.fill();
+  text(g, S.formatMs(rem), W / 2, H * 0.36, 58, '#fff', 800, 'center');
+  g.fillStyle = theme.contrast ? '#333' : 'rgba(255,255,255,.15)'; roundRect(g, 18, H * 0.54, W - 36, 10, 5); g.fill();
+  g.fillStyle = t.mode === 'focus' ? '#ff6b8a' : '#2fc59b'; roundRect(g, 18, H * 0.54, Math.max(10, (W - 36) * frac), 10, 5); g.fill();
 });
 timerPanel.position.set(0, TIMER_Y, TIMER_Z); timerPanel.rotation.x = 0.08; ws.add(timerPanel);
 
@@ -260,14 +259,12 @@ function armFocusIfStarting(wasRunning: boolean) {
     popPlant();
   }
 }
-const TIMER_BTN_W = 0.11;
-const DUR_W = 0.07;
-const startBtn = mkBtn('Start', TIMER_BTN_W, 0x2fc59b, timerPanel, [-0.125, -0.066, 0.004], () => {
+const startBtn = mkBtn('Start', TIMER_BTN_W, 0x2fc59b, timerPanel, [-0.125, TIMER_BTN_Y, 0.004], () => {
   const was = state.timer.running; S.toggleTimer(state.timer, Date.now()); armFocusIfStarting(was); refreshTimerBtn(); timerPanel.redraw(); persist();
   if (!was && state.timer.running) advanceTutorial('timer');
 }, '>', 'button:start');
-mkBtn('Reset', TIMER_BTN_W, 0x9b6bff, timerPanel, [0, -0.066, 0.004], () => { S.resetTimer(state.timer); state.focusId = null; refreshTimerBtn(); timerPanel.redraw(); persist(); }, '', 'button:reset');
-mkBtn('Skip', TIMER_BTN_W, 0x38c6e8, timerPanel, [0.125, -0.066, 0.004], () => {
+mkBtn('Reset', TIMER_BTN_W, 0x9b6bff, timerPanel, [0, TIMER_BTN_Y, 0.004], () => { S.resetTimer(state.timer); state.focusId = null; refreshTimerBtn(); timerPanel.redraw(); persist(); }, '', 'button:reset');
+mkBtn('Skip', TIMER_BTN_W, 0x38c6e8, timerPanel, [0.125, TIMER_BTN_Y, 0.004], () => {
   state.timer.mode = state.timer.mode === 'focus' ? 'break' : 'focus';
   state.timer.durationMs = state.timer.mode === 'focus' ? S.FOCUS_MS : S.BREAK_MS;
   S.resetTimer(state.timer); state.focusId = null; refreshTimerBtn(); timerPanel.redraw(); persist();
@@ -283,11 +280,11 @@ function setFocusLength(minutes: number) {
   persist();
 }
 const durationBtns = S.FOCUS_LENGTHS_MIN.map((minutes, i) =>
-  mkBtn(`${minutes}m`, DUR_W, 0x4f8cff, timerPanel, [(i - 1) * 0.08, -0.018, 0.004], () => setFocusLength(minutes), '', `button:duration:${minutes}`, 0.026)
+  mkBtn(`${minutes}m`, DUR_W, 0x4f8cff, timerPanel, [(i - 1) * DUR_GAP, DUR_Y, 0.004], () => setFocusLength(minutes), '', `button:duration:${minutes}`, DUR_H)
 );
 function refreshTimerBtn() {
   const r = state.timer.running;
-  startBtn.panel.draw = button(r ? 'Pause' : 'Start', TIMER_BTN_W, 0.046, r ? 0xffb547 : 0x2fc59b, r ? '||' : '>').draw;
+  startBtn.panel.draw = button(r ? 'Pause' : 'Start', TIMER_BTN_W, TIMER_BTN_H, r ? 0xffb547 : 0x2fc59b, r ? '||' : '>').draw;
   startBtn.panel.redraw();
   const idleFocus = !r && state.timer.mode === 'focus';
   const current = Math.round(state.timer.durationMs / 60_000);
@@ -296,7 +293,7 @@ function refreshTimerBtn() {
     btn.obj.visible = idleFocus;
     if (idleFocus) {
       const on = minutes === current;
-      btn.panel.draw = button(`${minutes}m`, DUR_W, 0.026, on ? 0x2fc59b : 0x4f8cff).draw;
+      btn.panel.draw = button(`${minutes}m`, DUR_W, DUR_H, on ? 0x2fc59b : 0x4f8cff).draw;
       btn.panel.redraw();
     }
   });
@@ -361,7 +358,7 @@ function refreshPlant() {
 }
 
 // Focus has a spatial consequence: the backlog fades while the desk stays within reach.
-const focusCue = new Panel(0.56, 0.04, 1400, (g, W, H) => {
+const focusCue = new Panel(TOAST_W, TOAST_H, 1400, (g, W, H) => {
   const task = state.cards.find(c => c.id === state.focusId) ?? S.singleParked(state);
   const running = state.timer.running && state.timer.mode === 'focus';
   const cue = task?.nextStep ? `Next: ${task.nextStep}` : running ? 'One thing. Right here. Let the rest wait.' : task ? 'Ready when you are · Start focus' : 'Leave one task on your desk';
@@ -369,10 +366,8 @@ const focusCue = new Panel(0.56, 0.04, 1400, (g, W, H) => {
   g.font = `650 ${H * 0.36}px system-ui`;
   text(g, ellipsize(g, cue, W - 32), W / 2, H / 2, H * 0.36, '#b6f1cf', 650, 'center');
 });
-const TOAST_Y = TIMER_Y - TIMER_H / 2 - 0.032;
-const TOAST_Z = TIMER_Z + 0.03;
 focusCue.position.set(0, TOAST_Y, TOAST_Z); ws.add(focusCue); focusCue.visible = false;
-focusCue.scale.set(TIMER_W / 0.56, 1, 1);
+focusCue.scale.set(TIMER_W / TOAST_W, 1, 1);
 let lastFocusSignature = '';
 function updateQuietFocus() {
   const teaching = S.needsOnboarding(state);
@@ -389,19 +384,18 @@ function updateQuietFocus() {
 
 let payoffText = '';
 let tutorialT0 = 0;
-const coachY = 0.125;
-const tut = new Panel(0.42, 0.07, 1400, (g, W, H) => {
+const tut = new Panel(COACH_W, COACH_H, 1400, (g, W, H) => {
   roundRect(g, 0, 0, W, H, 24); g.fillStyle = theme.contrast ? '#000' : 'rgba(79,140,255,0.22)'; g.fill();
   g.strokeStyle = '#ffffff'; g.lineWidth = 4; g.stroke();
   const step = S.TUTORIAL_STEPS[state.tutorialStep];
   const stepLabel = step ? `${state.tutorialStep + 1}/${S.TUTORIAL_STEPS.length}  ${step.coach}` : '';
   if (payoffText) text(g, payoffText, W / 2, H / 2, 22, '#fff', 700, 'center', W - 48);
   else {
-    text(g, S.TUTORIAL_INTRO, W / 2, H * 0.32, 15, '#ffe1a8', 700, 'center', W - 110);
-    text(g, stepLabel, W / 2, H * 0.68, 18, '#fff', 700, 'center', W - 110);
+    text(g, S.TUTORIAL_INTRO, W / 2, H * 0.32, 16, '#ffe1a8', 700, 'center', W - 160);
+    text(g, stepLabel, W / 2, H * 0.62, 18, '#fff', 700, 'center', W - 160);
   }
 });
-tut.position.set(0, TOAST_Y, TOAST_Z); ws.add(tut);
+tut.position.set(0, COACH_Y, COACH_Z); ws.add(tut);
 function syncTutorialChrome() {
   const teaching = S.needsOnboarding(state) && !payoffText;
   tut.visible = S.needsOnboarding(state) || !!payoffText;
@@ -436,7 +430,7 @@ function dismissTutorial() {
 function restartTutorial() {
   S.replayTutorial(state); payoffText = ''; tutorialT0 = 0; syncTutorialChrome(); tut.redraw(); syncStandLabel(); persist();
 }
-const skipTut = mkBtn('Skip', 0.06, 0x38c6e8, tut, [0.17, -0.02, 0.004], () => dismissTutorial(), '', 'button:skip-tutorial', 0.026);
+const skipTut = mkBtn('Skip', SKIP_TUT_W, 0x38c6e8, tut, [SKIP_TUT_X, SKIP_TUT_Y, 0.004], () => dismissTutorial(), '', 'button:skip-tutorial', SKIP_TUT_H);
 tut.visible = S.needsOnboarding(state);
 skipTut.obj.visible = S.needsOnboarding(state);
 
@@ -454,7 +448,7 @@ const modePanel = new Panel(0.4, 0.12, 1100, (g, W, H) => {
     text(g, line, 20, 62, 16, '#fff', 600, 'left', W - 36);
   }
 });
-modePanel.position.set(0, coachY, TIMER_Z); modePanel.visible = false; ws.add(modePanel);
+modePanel.position.set(0, COACH_Y, TIMER_Z); modePanel.visible = false; ws.add(modePanel);
 const modeFocus = mkBtn('Focus', 0.07, 0x2fc59b, modePanel, [0.12, -0.04, 0.004], () => { const was = state.timer.running; S.startTimer(state.timer, Date.now()); armFocusIfStarting(was); refreshTimerBtn(); timerPanel.redraw(); persist(); }, '>');
 const modeDone = mkBtn('Reviewed', 0.09, 0xffb547, modePanel, [0.12, -0.04, 0.004], () => { S.completeReview(state); refreshMode(); refreshPlant(); persist(); sfx.done(); }, '', 'button:reviewed');
 function refreshMode() {
@@ -605,16 +599,77 @@ function rememberPose(surface?: 'desk' | 'wall') {
   syncPlaceChrome();
   wantAnchor = renderer.xr.isPresenting; persist();
 }
-function recenter() {
+const headPos = new THREE.Vector3();
+const headDir = new THREE.Vector3();
+const headQuat = new THREE.Quaternion();
+const wsFacing = new THREE.Vector3();
+const UNIT_Z = new THREE.Vector3(0, 0, 1);
+let pendingRecenter = false;
+let recenterUntil = 0;
+let recenterDoneAt = new THREE.Vector3();
+let didSessionRecenter = false;
+
+function readViewerPose(frame?: XRFrame) {
+  const ref = renderer.xr.getReferenceSpace();
+  if (frame && ref) {
+    const pose = frame.getViewerPose(ref);
+    if (!pose) return null;
+    const t = pose.transform;
+    headPos.set(t.position.x, t.position.y, t.position.z);
+    headQuat.set(t.orientation.x, t.orientation.y, t.orientation.z, t.orientation.w);
+    headDir.set(0, 0, -1).applyQuaternion(headQuat);
+    return { position: headPos, quaternion: headQuat, direction: headDir, tracked: !poseLooksUntracked(t.position, t.orientation) };
+  }
+  return null;
+}
+
+function applyWorkspaceInFront(head: { x: number; y: number; z: number }, look: { x: number; y: number; z: number }) {
   followAnchor = false; liveAnchor = null;
-  const head = new THREE.Vector3(); camera.getWorldPosition(head);
-  const dir = new THREE.Vector3(); camera.getWorldDirection(dir); dir.y = 0; if (dir.lengthSq() < 1e-6) dir.set(0, 0, -1); dir.normalize();
-  ws.position.copy(head).addScaledVector(dir, EYE); ws.position.y = head.y - EYE_DROP;
-  ws.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir.clone().negate());
-  // Board front (+Z) faces the user, who is behind the workspace along -dir.
-  const toUser = head.clone().sub(ws.position); toUser.y = 0; toUser.normalize();
-  if (toUser.lengthSq() > 0) ws.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), toUser);
-  rememberPose(); sfx.press();
+  const pose = workspacePoseFromHead(head, look);
+  ws.visible = true;
+  ws.position.set(pose.position.x, pose.position.y, pose.position.z);
+  wsFacing.set(pose.facing.x, pose.facing.y, pose.facing.z);
+  if (wsFacing.lengthSq() > 0) ws.quaternion.setFromUnitVectors(UNIT_Z, wsFacing);
+  else ws.quaternion.identity();
+  rememberPose();
+}
+
+function recenter() {
+  camera.getWorldPosition(headPos);
+  camera.getWorldDirection(headDir);
+  applyWorkspaceInFront(headPos, headDir);
+  sfx.press();
+}
+
+/** On entering XR, wait for a tracked viewer pose and retry for up to a second as tracking settles. */
+function settleWorkspaceInView(frame?: XRFrame) {
+  if (!renderer.xr.isPresenting) return;
+  const now = performance.now();
+  const viewer = readViewerPose(frame);
+  if (!pendingRecenter && now > recenterUntil) return;
+  const jumped = didSessionRecenter && viewer && viewer.position.distanceTo(recenterDoneAt) > 0.3;
+  if (!pendingRecenter && !jumped) return;
+  if (viewer && !viewer.tracked && now < recenterUntil) return;
+  if (!viewer && now < recenterUntil) return;
+  if (viewer) applyWorkspaceInFront(viewer.position, viewer.direction);
+  else {
+    camera.getWorldPosition(headPos);
+    camera.getWorldDirection(headDir);
+    applyWorkspaceInFront(headPos, headDir);
+  }
+  if (viewer) recenterDoneAt.copy(viewer.position);
+  else recenterDoneAt.copy(headPos);
+  didSessionRecenter = true;
+  pendingRecenter = false;
+}
+
+function armSessionRecenter() {
+  pendingRecenter = true;
+  didSessionRecenter = false;
+  recenterUntil = performance.now() + 1000;
+  followAnchor = false;
+  liveAnchor = null;
+  ws.visible = true;
 }
 function placeWorkspace(point: THREE.Vector3, normal: THREE.Vector3) {
   followAnchor = false; liveAnchor = null;
@@ -674,7 +729,7 @@ const voicePanel = new Panel(0.58, 0.16, 1400, (g, W, H) => {
   const fitted = S.fitWrappedText(pendingVoice || voiceMessage, W - 52, H * 0.46, (sample, font) => { g.font = `600 ${font}px system-ui`; return measuredWidth(g, sample); }, 20, 30);
   paintLines(g, fitted.lines, 26, 62, fitted.font, '#fff', 600, 'left', fitted.font * 1.2);
 });
-voicePanel.position.set(0, coachY + 0.015, TIMER_Z + 0.015); voicePanel.visible = false; ws.add(voicePanel);
+voicePanel.position.set(0, COACH_Y + 0.015, TIMER_Z + 0.015); voicePanel.visible = false; ws.add(voicePanel);
 const acceptVoice = mkBtn('Use words', 0.13, 0x2fc59b, voicePanel, [-0.15, -0.055, 0.008], () => usePendingVoice(), '', 'button:voice-accept');
 mkBtn('Cancel', 0.12, 0x9b6bff, voicePanel, [0, -0.055, 0.008], () => { discardRecording = true; capture.stop(); rec?.stop(); pendingVoice = ''; voicePanel.visible = false; voiceStatus('Voice cancelled'); refreshMode(); }, '', 'button:voice-cancel');
 mkBtn('Mic / Stop', 0.13, 0xff6b8a, voicePanel, [0.15, -0.055, 0.008], () => { void toggleMic(); }, '', 'button:voice-stop');
@@ -787,6 +842,10 @@ addEventListener('keydown', e => {
   if ((e.target as HTMLElement)?.closest('input,textarea,select,[contenteditable]')) return;
   keys.add(e.key.toLowerCase());
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undoLast(); }
+  if (e.key.toLowerCase() === 'r' && renderer.xr.isPresenting && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    e.preventDefault();
+    recenter();
+  }
 });
 addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 
@@ -889,9 +948,12 @@ function updatePointers(frame?: XRFrame) {
     const quickClick = p.key === 'mouse' && mouseLatch && !mouseHold && mouseTravel < 0.04;
     if (p.pinching && !p.wasPinching) {
       unlockAudio();
-      if (h?.grabbable && !quickClick) { grab(p, h); if (h.kind === 'card') advanceTutorial('pinch'); }
+      const menuButton = !!(h && h.kind === 'button' && h.obj.parent === handMenu);
+      // While placing, a gaze pinch should snap to the desk even if the board
+      // is already in front of the viewer. Menu buttons still work.
+      if (placing && hitValid && !quickClick && !menuButton) placeWorkspace(hitPoint, hitNormal);
+      else if (h?.grabbable && !quickClick) { grab(p, h); if (h.kind === 'card') advanceTutorial('pinch'); }
       else if (h?.kind === 'button') press(h);
-      else if (placing && hitValid && !quickClick) placeWorkspace(hitPoint, hitNormal);
     }
     if (!p.pinching && p.wasPinching && p.grabbed) release(p);
     if (p.grabbed) {
@@ -1118,7 +1180,7 @@ function applyEnvironment(mode: 'ar' | 'vr' | 'desktop') {
 }
 function parkDesktop() {
   camera.rotation.set(0, 0, 0);
-  ws.position.set(0, 1.2 - EYE_DROP, -0.55); ws.quaternion.identity();
+  ws.position.set(0, DESKTOP_CAM_Y - EYE_DROP, DESKTOP_WS_Z); ws.quaternion.identity();
   frameDesktop();
 }
 async function setupHitTest(session: XRSession) {
@@ -1129,12 +1191,6 @@ async function setupHitTest(session: XRSession) {
     const source = await session.requestHitTestSource({ space: viewer, entityTypes: ['plane', 'point'] });
     hitSource = source ?? null;
   } catch { hitSource = null; }
-}
-async function tryRestoreAnchor(session: XRSession) {
-  const id = state.placement?.anchorId;
-  if (!id || !session.restorePersistentAnchor) return false;
-  try { liveAnchor = await session.restorePersistentAnchor(id); followAnchor = true; placing = false; return true; }
-  catch { return false; }
 }
 async function beginSession(prefer: 'ar' | 'vr') {
   if (!navigator.xr) return;
@@ -1162,6 +1218,12 @@ async function beginSession(prefer: 'ar' | 'vr') {
   renderer.setPixelRatio(1);
   renderer.xr.setFramebufferScaleFactor(1);
   (renderer.xr as THREE.WebXRManager & { setFoveation?: (n: number) => void }).setFoveation?.(1);
+  // Arm recenter before setSession so the first presenting frames cannot
+  // run against a leftover desktop camera or a restored off-screen anchor.
+  armSessionRecenter();
+  placing = mode === 'ar';
+  ws.visible = true;
+  session.addEventListener('end', onSessionEnd);
   await renderer.xr.setSession(session);
   applyEnvironment(mode);
   if (prefer === 'ar' && mode !== 'ar') {
@@ -1171,23 +1233,13 @@ async function beginSession(prefer: 'ar' | 'vr') {
   document.body.classList.add('in-xr');
   mrItem.panel.draw = button(mode === 'ar' ? 'VR' : 'MR', 0.055, 0.024, 0x38c6e8).draw; mrItem.panel.redraw();
   await setupHitTest(session);
-  const restored = await tryRestoreAnchor(session);
-  if (restored) followAnchor = true;
-  // Always put the workspace in front of the viewer on the first XR frame.
-  // A saved placement from an older session is often off-screen in the emulator.
-  pendingRecenter = true;
-  if (mode === 'ar') placing = !restored;
-  session.addEventListener('end', onSessionEnd);
-}
-let pendingRecenter = false;
-function applyPlacement(p: S.Placement) {
-  ws.position.fromArray(p.position); ws.quaternion.fromArray(p.quaternion);
-  syncPlaceChrome();
+  // Do not snap to a saved/persistent anchor on entry — those poses are often
+  // off-screen in the emulator and hide the board behind the viewer.
 }
 function onSessionEnd() {
   document.body.classList.remove('in-xr');
   hitSource = null; liveAnchor = null; followAnchor = false; placing = false; reticle.visible = false; handMenu.visible = false;
-  pendingRecenter = false;
+  pendingRecenter = false; recenterUntil = 0; didSessionRecenter = false;
   currentMode = null; renderer.setPixelRatio(Math.min(devicePixelRatio, 1.25));
   parkDesktop(); applyEnvironment('desktop');
   const next = pendingMode; pendingMode = null;
@@ -1252,7 +1304,7 @@ renderer.setAnimationLoop((time, frame) => {
   frameTimer.update(time);
   const dt = Math.min(frameTimer.getDelta(), 0.05);
   if (currentMode === 'ar' && (scene.background || stars.visible || grid.visible || ring.visible)) applyEnvironment('ar');
-  if (pendingRecenter && renderer.xr.isPresenting) { pendingRecenter = false; recenter(); }
+  settleWorkspaceInView(frame);
   if (!renderer.xr.isPresenting) { if (keys.has('a')) camera.rotation.y += dt; if (keys.has('d')) camera.rotation.y -= dt; gazeDot.visible = false; }
   else {
     camera.getWorldPosition(gazeDot.position);
@@ -1428,8 +1480,45 @@ function applySaid(said: string) {
   if (act.kind === 'card' || act.kind === 'plan') advanceTutorial('create');
   if (act.kind === 'park') advanceTutorial('park');
 }
+
+const _frustum = new THREE.Frustum();
+const _proj = new THREE.Matrix4();
+function workspaceViewProof() {
+  camera.updateMatrixWorld(true);
+  ws.updateMatrixWorld(true);
+  board.updateMatrixWorld(true);
+  timerPanel.updateMatrixWorld(true);
+  const camPos = camera.getWorldPosition(new THREE.Vector3());
+  const camDir = camera.getWorldDirection(new THREE.Vector3());
+  const boardPos = board.getWorldPosition(new THREE.Vector3());
+  const timerPos = timerPanel.getWorldPosition(new THREE.Vector3());
+  const wsPos = ws.getWorldPosition(new THREE.Vector3());
+  _frustum.setFromProjectionMatrix(_proj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  const toBoard = boardPos.clone().sub(camPos);
+  const forward = toBoard.dot(camDir);
+  const distance = camPos.distanceTo(wsPos);
+  const boardBox = new THREE.Box3().setFromObject(board);
+  const timerBox = new THREE.Box3().setFromObject(timerPanel);
+  return {
+    presenting: renderer.xr.isPresenting,
+    mode: currentMode,
+    placing,
+    wsVisible: ws.visible,
+    cam: { x: camPos.x, y: camPos.y, z: camPos.z },
+    look: { x: camDir.x, y: camDir.y, z: camDir.z },
+    board: { x: boardPos.x, y: boardPos.y, z: boardPos.z },
+    timer: { x: timerPos.x, y: timerPos.y, z: timerPos.z },
+    workspace: { x: wsPos.x, y: wsPos.y, z: wsPos.z },
+    distance,
+    forward,
+    inFront: forward > 0.25,
+    boardInView: _frustum.intersectsBox(boardBox) || _frustum.containsPoint(boardPos),
+    timerInView: _frustum.intersectsBox(timerBox) || _frustum.containsPoint(timerPos),
+    pendingRecenter,
+  };
+}
 (window as unknown as { handflow?: unknown }).handflow = {
-  state, recenter, screenOf, deskLayoutProof: () => ({ surface: state.placement?.surface, toolbarY: dock.position.y, tabletopY: -0.22, trashY: dock.position.y + trashP.position.y, standsY: S.DESK_SLOTS.map(s => s.y) }), focusProof: () => ({ quiet: board.material.opacity < 1, plantProgress: plant.focus, plantStage: plant.stage }), voiceProof: () => ({ endpoint: cloudEndpoint, pending: pendingVoice, message: voiceMessage }), fps: () => fpsValue, refresh: () => { refreshMode(); applyA11y(); },
+  state, recenter, screenOf, workspaceViewProof, deskLayoutProof: () => ({ surface: state.placement?.surface, toolbarY: dock.position.y, tabletopY: -0.22, trashY: dock.position.y + trashP.position.y, standsY: S.DESK_SLOTS.map(s => s.y) }), focusProof: () => ({ quiet: board.material.opacity < 1, plantProgress: plant.focus, plantStage: plant.stage }), voiceProof: () => ({ endpoint: cloudEndpoint, pending: pendingVoice, message: voiceMessage }), fps: () => fpsValue, refresh: () => { refreshMode(); applyA11y(); },
   dictate: (text: string) => applySaid(text),
   holdMenu: (on: boolean) => { menuHold = on; if (on) poseHeldMenu(); else { handMenu.visible = false; palmOpen = false; } },
   menuOpen: () => handMenu.visible,

@@ -84,9 +84,12 @@ test('passthrough places the board on a desk, anchors it, and a long note fits',
   await page.evaluate(() => (window as unknown as { handflow: { endSession: () => void } }).handflow.endSession());
   await page.waitForFunction(() => !document.body.classList.contains('in-xr'));
   await page.click('#enter');
+  // Re-entry recenters in front of the viewer (a saved desk anchor must not hide the board).
   await page.waitForFunction(() => {
-    const xr = (window as unknown as { handflow: { xr: () => { presenting: boolean; mode: string; surface: string | null; following: boolean } } }).handflow.xr();
-    return xr.presenting && xr.mode === 'ar' && xr.surface === 'desk' && xr.following;
+    const hf = (window as unknown as { handflow: { xr: () => { presenting: boolean; mode: string }; workspaceViewProof: () => { inFront: boolean; boardInView: boolean; timerInView: boolean; wsVisible: boolean } } }).handflow;
+    const xr = hf.xr();
+    const view = hf.workspaceViewProof();
+    return xr.presenting && xr.mode === 'ar' && view.wsVisible && view.inFront && view.boardInView && view.timerInView;
   }, null, { timeout: 15000 });
   expect(errors, errors.join('\n')).toEqual([]);
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as S from '../src/state';
-import { fitsComfort, BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COL_W, COLUMN_PAGE, DESKTOP_CAM_Z, DOCK_Y, DOCK_Z, DOCK_HALF, MORE_H, MORE_Y, TIMER_H, TIMER_Y, TIMER_Z, TIMER_W, PLANT_X } from '../src/layout';
+import { fitsComfort, BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COACH_H, COACH_Y, COL_W, COLUMN_PAGE, DESKTOP_CAM_Y, DESKTOP_FOV, DESKTOP_WS_Z, DOCK_Y, DOCK_Z, DOCK_HALF, DUR_GAP, DUR_H, DUR_W, DUR_Y, EYE, EYE_DROP, MORE_H, MORE_Y, SKIP_TUT_H, SKIP_TUT_W, TIMER_BTN_H, TIMER_BTN_Y, TIMER_H, TIMER_Y, TIMER_Z, TIMER_W, TOAST_H, TOAST_Y, PLANT_X, XR_DROP, desktopCameraDistance, panelYFromCanvas, poseLooksUntracked, workspacePoseFromHead } from '../src/layout';
 
 const day = (y: number, m: number, d: number) => new Date(y, m - 1, d, 9, 0, 0);
 
@@ -185,11 +185,14 @@ describe('accessibility and tutorial', () => {
     expect(BOARD_W).toBeCloseTo(0.72, 2);
     expect(BOARD_H).toBeCloseTo(0.51, 2);
     expect(fitsComfort(0, DOCK_HALF, DOCK_Z)).toBe(true);
-    const tan = Math.tan((52 * Math.PI) / 360);
-    const ndcY = (worldY: number, worldZ: number) => ((worldY - 1.2) / (DESKTOP_CAM_Z - worldZ)) / tan;
-    const wsY = 1.2 - 0.02, wsZ = -0.55;
+    const vTan = Math.tan((DESKTOP_FOV * Math.PI) / 360);
+    const aspect = 1280 / 800;
+    const camZ = (DESKTOP_WS_Z + BOARD_Z) + desktopCameraDistance(aspect);
+    const ndcY = (worldY: number, worldZ: number) => ((worldY - DESKTOP_CAM_Y) / (camZ - worldZ)) / vTan;
+    const wsY = DESKTOP_CAM_Y - EYE_DROP, wsZ = DESKTOP_WS_Z;
     expect(ndcY(wsY + TIMER_Y + TIMER_H / 2, wsZ + TIMER_Z)).toBeLessThan(0.92);
     expect(ndcY(wsY + DOCK_Y - 0.082, wsZ + DOCK_Z)).toBeGreaterThan(-0.92);
+    expect(ndcY(wsY + COACH_Y + COACH_H / 2, wsZ + TIMER_Z)).toBeLessThan(0.92);
     expect(fitsComfort(0, TIMER_W / 2, TIMER_Z)).toBe(true);
     expect(fitsComfort(PLANT_X, 0.03, TIMER_Z)).toBe(true);
     expect(TIMER_Y - TIMER_H / 2).toBeGreaterThan(BOARD_H / 2);
@@ -370,14 +373,62 @@ describe('review fixes', () => {
   });
 
   it('sits the +N more chip below the column header and above the first card, clear of the toast slot', () => {
-    const headerY = BOARD_H / 2 - (47 / (BOARD_H * 800)) * BOARD_H;
-    const headerHalf = (18 / (BOARD_H * 800)) * BOARD_H / 2;
+    const headerY = panelYFromCanvas(47, BOARD_H, 800);
+    const headerHalf = 18 / (2 * 800);
+    const todayY = panelYFromCanvas(18, BOARD_H, 800);
+    const todayHalf = 16 / (2 * 800);
     expect(Math.abs(MORE_Y - headerY)).toBeGreaterThan((MORE_H + headerHalf * 2) / 2);
     expect(MORE_Y - MORE_H / 2).toBeGreaterThan(CARD_TOP + CARD_H / 2);
-    const toastY = TIMER_Y - TIMER_H / 2 - 0.032;
-    const tutHalf = 0.035;
-    expect(toastY - tutHalf).toBeGreaterThan(headerY + headerHalf);
-    expect(toastY - tutHalf).toBeGreaterThan(MORE_Y + MORE_H / 2);
+    expect(TOAST_Y - TOAST_H / 2).toBeGreaterThan(headerY + headerHalf);
+    expect(TOAST_Y - TOAST_H / 2).toBeGreaterThan(MORE_Y + MORE_H / 2);
+    expect(COACH_Y - COACH_H / 2).toBeGreaterThan(BOARD_H / 2 + 0.015);
+    expect(COACH_Y - COACH_H / 2).toBeGreaterThan(todayY + todayHalf);
+    expect(TOAST_Y - TOAST_H / 2).toBeGreaterThan(todayY + todayHalf);
+    expect(TOAST_Y - TOAST_H / 2).toBeGreaterThan(COACH_Y + COACH_H / 2);
+    expect(TIMER_Y - TIMER_H / 2).toBeGreaterThan(TOAST_Y + TOAST_H / 2);
+    expect(SKIP_TUT_W).toBeGreaterThanOrEqual(0.09);
+    expect(SKIP_TUT_H).toBeGreaterThanOrEqual(0.036);
+  });
+
+  it('spaces the 25m/5m/1m chips below the timer digits', () => {
+    const digitY = panelYFromCanvas(0.36 * (TIMER_H * 1200), TIMER_H, 1200);
+    const digitHalf = 58 / (2 * 1200);
+    expect(digitY - digitHalf).toBeGreaterThan(DUR_Y + DUR_H / 2 + 0.008);
+    expect(DUR_Y - DUR_H / 2).toBeGreaterThan(TIMER_BTN_Y + TIMER_BTN_H / 2);
+    expect(DUR_W).toBeGreaterThanOrEqual(0.09);
+    expect(DUR_H).toBeGreaterThanOrEqual(0.034);
+    expect(DUR_GAP).toBeGreaterThan(DUR_W);
+  });
+
+  it('places the workspace 0.6-0.8 m in front of a seated head and rejects an untracked identity pose', () => {
+    const pose = workspacePoseFromHead({ x: 0, y: 1.35, z: 0 }, { x: 0, y: 0, z: -1 });
+    expect(pose.dist).toBeGreaterThanOrEqual(0.6);
+    expect(pose.dist).toBeLessThanOrEqual(0.8);
+    expect(pose.position.z).toBeCloseTo(-EYE);
+    expect(pose.position.y).toBeCloseTo(1.35 - XR_DROP);
+    expect(pose.facing.z).toBeCloseTo(1);
+    expect(poseLooksUntracked({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0, w: 1 })).toBe(true);
+    expect(poseLooksUntracked({ x: 0, y: 1.35, z: 0 }, { x: 0, y: 0, z: 0, w: 1 })).toBe(false);
+    const turned = workspacePoseFromHead({ x: 1, y: 1.2, z: 2 }, { x: 0.8, y: -0.2, z: 0.2 });
+    const dx = turned.position.x - 1, dz = turned.position.z - 2;
+    expect(Math.hypot(dx, dz)).toBeCloseTo(EYE);
+    expect(dx * 0.8 + dz * 0.2).toBeGreaterThan(0);
+    const angleTo = (head: { x: number; y: number; z: number }, look: { x: number; y: number; z: number }, point: { x: number; y: number; z: number }) => {
+      const vx = point.x - head.x, vy = point.y - head.y, vz = point.z - head.z;
+      const ln = Math.hypot(look.x, look.y, look.z), pn = Math.hypot(vx, vy, vz);
+      return Math.acos(Math.min(1, Math.max(-1, (vx * look.x + vy * look.y + vz * look.z) / (ln * pn)))) * 180 / Math.PI;
+    };
+    const head = { x: 0, y: 1.15, z: 0 };
+    const down = { x: 0.30, y: -0.58, z: -0.76 };
+    const seated = workspacePoseFromHead(head, down);
+    const boardPt = { x: seated.position.x, y: seated.position.y, z: seated.position.z };
+    const timerPt = { x: seated.position.x, y: seated.position.y + TIMER_Y, z: seated.position.z + TIMER_Z };
+    expect(angleTo(head, down, boardPt)).toBeLessThan(45);
+    expect(angleTo(head, down, timerPt)).toBeLessThan(48);
+    const ahead = { x: 0, y: 0, z: -1 };
+    const flat = workspacePoseFromHead(head, ahead);
+    expect(angleTo(head, ahead, { x: flat.position.x, y: flat.position.y, z: flat.position.z })).toBeLessThan(45);
+    expect(angleTo(head, ahead, { x: flat.position.x, y: flat.position.y + TIMER_Y, z: flat.position.z + TIMER_Z })).toBeLessThan(45);
   });
 
   it('does not restore a stale running break, but keeps a live focus and settles an expired one first', () => {
