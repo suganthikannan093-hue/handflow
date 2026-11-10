@@ -358,13 +358,15 @@ function refreshPlant() {
 }
 
 // Focus has a spatial consequence: the backlog fades while the desk stays within reach.
+let actionToast = '';
+let actionToastUntil = 0;
 const focusCue = new Panel(TOAST_W, TOAST_H, 1400, (g, W, H) => {
   const task = state.cards.find(c => c.id === state.focusId) ?? S.singleParked(state);
   const running = state.timer.running && state.timer.mode === 'focus';
-  const cue = task?.nextStep ? `Next: ${task.nextStep}` : running ? 'One thing. Right here. Let the rest wait.' : task ? 'Ready when you are · Start focus' : 'Leave one task on your desk';
-  roundRect(g, 0, 0, W, H, 18); g.fillStyle = '#102a29'; g.fill();
+  const cue = actionToast || (task?.nextStep ? `Next: ${task.nextStep}` : running ? 'One thing. Right here. Let the rest wait.' : task ? 'Ready when you are · Start focus' : 'Leave one task on your desk');
+  roundRect(g, 0, 0, W, H, 18); g.fillStyle = actionToast ? '#1a2a4a' : '#102a29'; g.fill();
   g.font = `650 ${H * 0.36}px system-ui`;
-  text(g, ellipsize(g, cue, W - 32), W / 2, H / 2, H * 0.36, '#b6f1cf', 650, 'center');
+  text(g, ellipsize(g, cue, W - 32), W / 2, H / 2, H * 0.36, actionToast ? '#d6e6ff' : '#b6f1cf', 650, 'center');
 });
 focusCue.position.set(0, TOAST_Y, TOAST_Z); ws.add(focusCue); focusCue.visible = false;
 focusCue.scale.set(TIMER_W / TOAST_W, 1, 1);
@@ -375,7 +377,8 @@ function updateQuietFocus() {
   const signature = `${quiet}:${teaching}:${state.onboarded}:${state.habit.mode}:${voicePanel.visible}:${state.focusId}:${state.cards.find(c => c.id === state.focusId)?.nextStep || ''}`;
   if (signature === lastFocusSignature) return;
   lastFocusSignature = signature;
-  focusCue.visible = !teaching && state.onboarded && state.habit.mode === 'work' && !voicePanel.visible && !payoffText;
+  if (actionToast && performance.now() > actionToastUntil) actionToast = '';
+  focusCue.visible = !!actionToast || (!teaching && state.onboarded && state.habit.mode === 'work' && !voicePanel.visible && !payoffText);
   board.material.opacity = quiet ? 0.22 : 1;
   for (const it of cardMeshes.values()) it.panel.material.opacity = quiet && it.obj.parent === boardPlane ? 0.22 : 1;
   for (const it of noteMeshes.values()) it.panel.material.opacity = quiet ? 0.28 : 1;
@@ -618,9 +621,26 @@ function readViewerPose(frame?: XRFrame) {
     headPos.set(t.position.x, t.position.y, t.position.z);
     headQuat.set(t.orientation.x, t.orientation.y, t.orientation.z, t.orientation.w);
     headDir.set(0, 0, -1).applyQuaternion(headQuat);
-    return { position: headPos, quaternion: headQuat, direction: headDir, tracked: !poseLooksUntracked(t.position, t.orientation) };
+    lastViewerPos.copy(headPos);
+    lastViewerDir.copy(headDir);
+    const tracked = !poseLooksUntracked(t.position, t.orientation);
+    haveViewerPose = tracked;
+    return { position: headPos, quaternion: headQuat, direction: headDir, tracked };
   }
   return null;
+}
+
+const lastViewerPos = new THREE.Vector3();
+const lastViewerDir = new THREE.Vector3(0, 0, -1);
+const recenterDoneDir = new THREE.Vector3(0, 0, -1);
+let haveViewerPose = false;
+
+function showActionToast(message: string, ms = 2200) {
+  actionToast = message;
+  actionToastUntil = performance.now() + ms;
+  lastFocusSignature = '';
+  updateQuietFocus();
+  focusCue.redraw();
 }
 
 function applyWorkspaceInFront(head: { x: number; y: number; z: number }, look: { x: number; y: number; z: number }) {
@@ -634,31 +654,62 @@ function applyWorkspaceInFront(head: { x: number; y: number; z: number }, look: 
   rememberPose();
 }
 
+function xrViewCamera() {
+  if (!renderer.xr.isPresenting) {
+    camera.updateMatrixWorld(true);
+    return camera;
+  }
+  const xrCam = renderer.xr.getCamera();
+  xrCam.updateMatrixWorld(true);
+  const views = (xrCam as THREE.ArrayCamera).cameras;
+  if (views && views.length) {
+    views[0].updateMatrixWorld(true);
+    return views[0];
+  }
+  return xrCam;
+}
+
+/** Recenter from the live XR viewer pose, not the leftover desktop camera. */
 function recenter() {
-  camera.getWorldPosition(headPos);
-  camera.getWorldDirection(headDir);
-  applyWorkspaceInFront(headPos, headDir);
+  pendingRecenter = true;
+  recenterUntil = performance.now() + 1000;
+  if (renderer.xr.isPresenting && haveViewerPose) {
+    applyWorkspaceInFront(lastViewerPos, lastViewerDir);
+    recenterDoneAt.copy(lastViewerPos);
+    recenterDoneDir.copy(lastViewerDir);
+    didSessionRecenter = true;
+  }
+  showActionToast('Workspace recentered');
   sfx.press();
 }
 
-/** On entering XR, wait for a tracked viewer pose and retry for up to a second as tracking settles. */
+/** On entering XR, wait for a tracked viewer pose and retry as tracking / look settles. */
 function settleWorkspaceInView(frame?: XRFrame) {
   if (!renderer.xr.isPresenting) return;
   const now = performance.now();
   const viewer = readViewerPose(frame);
-  if (!pendingRecenter && now > recenterUntil) return;
-  const jumped = didSessionRecenter && viewer && viewer.position.distanceTo(recenterDoneAt) > 0.3;
-  if (!pendingRecenter && !jumped) return;
+  const settling = pendingRecenter || now <= recenterUntil;
+  const jumped = didSessionRecenter && settling && viewer && viewer.position.distanceTo(recenterDoneAt) > 0.3;
+  const turned = didSessionRecenter && settling && viewer && viewer.direction.dot(recenterDoneDir) < 0.97;
+  if (!pendingRecenter && !jumped && !turned && now > recenterUntil) return;
   if (viewer && !viewer.tracked && now < recenterUntil) return;
   if (!viewer && now < recenterUntil) return;
-  if (viewer) applyWorkspaceInFront(viewer.position, viewer.direction);
-  else {
-    camera.getWorldPosition(headPos);
-    camera.getWorldDirection(headDir);
+  if (viewer) {
+    applyWorkspaceInFront(viewer.position, viewer.direction);
+    recenterDoneAt.copy(viewer.position);
+    recenterDoneDir.copy(viewer.direction);
+  } else if (haveViewerPose) {
+    applyWorkspaceInFront(lastViewerPos, lastViewerDir);
+    recenterDoneAt.copy(lastViewerPos);
+    recenterDoneDir.copy(lastViewerDir);
+  } else {
+    const xrCam = xrViewCamera();
+    xrCam.getWorldPosition(headPos);
+    xrCam.getWorldDirection(headDir);
     applyWorkspaceInFront(headPos, headDir);
+    recenterDoneAt.copy(headPos);
+    recenterDoneDir.copy(headDir);
   }
-  if (viewer) recenterDoneAt.copy(viewer.position);
-  else recenterDoneAt.copy(headPos);
   didSessionRecenter = true;
   pendingRecenter = false;
 }
@@ -1239,7 +1290,7 @@ async function beginSession(prefer: 'ar' | 'vr') {
 function onSessionEnd() {
   document.body.classList.remove('in-xr');
   hitSource = null; liveAnchor = null; followAnchor = false; placing = false; reticle.visible = false; handMenu.visible = false;
-  pendingRecenter = false; recenterUntil = 0; didSessionRecenter = false;
+  pendingRecenter = false; recenterUntil = 0; didSessionRecenter = false; haveViewerPose = false;
   currentMode = null; renderer.setPixelRatio(Math.min(devicePixelRatio, 1.25));
   parkDesktop(); applyEnvironment('desktop');
   const next = pendingMode; pendingMode = null;
@@ -1305,6 +1356,8 @@ renderer.setAnimationLoop((time, frame) => {
   const dt = Math.min(frameTimer.getDelta(), 0.05);
   if (currentMode === 'ar' && (scene.background || stars.visible || grid.visible || ring.visible)) applyEnvironment('ar');
   settleWorkspaceInView(frame);
+  if (actionToast && performance.now() > actionToastUntil) { actionToast = ''; lastFocusSignature = ''; updateQuietFocus(); }
+  cacheWorkspaceViewProof();
   if (!renderer.xr.isPresenting) { if (keys.has('a')) camera.rotation.y += dt; if (keys.has('d')) camera.rotation.y -= dt; gazeDot.visible = false; }
   else {
     camera.getWorldPosition(gazeDot.position);
@@ -1483,22 +1536,39 @@ function applySaid(said: string) {
 
 const _frustum = new THREE.Frustum();
 const _proj = new THREE.Matrix4();
-function workspaceViewProof() {
-  camera.updateMatrixWorld(true);
+const _ndc = new THREE.Vector3();
+const _world = new THREE.Vector3();
+type Ndc = { x: number; y: number; z: number; inView: boolean };
+type ViewProof = ReturnType<typeof computeWorkspaceViewProof>;
+let viewProofCache: ViewProof | null = null;
+
+function projectWorldToNdc(point: THREE.Vector3, cam: THREE.Camera): Ndc {
+  _ndc.copy(point).project(cam);
+  const inView = Number.isFinite(_ndc.x) && Math.abs(_ndc.x) <= 1 && Math.abs(_ndc.y) <= 1 && Math.abs(_ndc.z) <= 1;
+  return { x: _ndc.x, y: _ndc.y, z: _ndc.z, inView };
+}
+
+function computeWorkspaceViewProof() {
+  const cam = xrViewCamera();
+  cam.updateMatrixWorld(true);
   ws.updateMatrixWorld(true);
   board.updateMatrixWorld(true);
   timerPanel.updateMatrixWorld(true);
-  const camPos = camera.getWorldPosition(new THREE.Vector3());
-  const camDir = camera.getWorldDirection(new THREE.Vector3());
+  const camPos = cam.getWorldPosition(new THREE.Vector3());
+  const camDir = cam.getWorldDirection(new THREE.Vector3());
   const boardPos = board.getWorldPosition(new THREE.Vector3());
   const timerPos = timerPanel.getWorldPosition(new THREE.Vector3());
   const wsPos = ws.getWorldPosition(new THREE.Vector3());
-  _frustum.setFromProjectionMatrix(_proj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  const headerPos = board.localToWorld(_world.set(0, BOARD_H / 2 - 0.02, 0).clone());
+  const timerTopPos = timerPanel.localToWorld(_world.set(0, TIMER_H / 2, 0).clone());
+  const headerNdc = projectWorldToNdc(headerPos, cam);
+  const timerNdc = projectWorldToNdc(timerTopPos, cam);
+  const timerCenterNdc = projectWorldToNdc(timerPos, cam);
+  const boardNdc = projectWorldToNdc(boardPos, cam);
+  _frustum.setFromProjectionMatrix(_proj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
   const toBoard = boardPos.clone().sub(camPos);
   const forward = toBoard.dot(camDir);
   const distance = camPos.distanceTo(wsPos);
-  const boardBox = new THREE.Box3().setFromObject(board);
-  const timerBox = new THREE.Box3().setFromObject(timerPanel);
   return {
     presenting: renderer.xr.isPresenting,
     mode: currentMode,
@@ -1509,14 +1579,23 @@ function workspaceViewProof() {
     board: { x: boardPos.x, y: boardPos.y, z: boardPos.z },
     timer: { x: timerPos.x, y: timerPos.y, z: timerPos.z },
     workspace: { x: wsPos.x, y: wsPos.y, z: wsPos.z },
+    header: { x: headerPos.x, y: headerPos.y, z: headerPos.z },
+    timerTop: { x: timerTopPos.x, y: timerTopPos.y, z: timerTopPos.z },
+    headerNdc,
+    timerNdc,
+    timerCenterNdc,
+    boardNdc,
     distance,
     forward,
     inFront: forward > 0.25,
-    boardInView: _frustum.intersectsBox(boardBox) || _frustum.containsPoint(boardPos),
-    timerInView: _frustum.intersectsBox(timerBox) || _frustum.containsPoint(timerPos),
+    boardInView: headerNdc.inView && boardNdc.inView,
+    timerInView: timerNdc.inView && timerCenterNdc.inView,
     pendingRecenter,
+    toast: actionToast,
   };
 }
+function cacheWorkspaceViewProof() { viewProofCache = computeWorkspaceViewProof(); }
+function workspaceViewProof() { return viewProofCache ?? computeWorkspaceViewProof(); }
 (window as unknown as { handflow?: unknown }).handflow = {
   state, recenter, screenOf, workspaceViewProof, deskLayoutProof: () => ({ surface: state.placement?.surface, toolbarY: dock.position.y, tabletopY: -0.22, trashY: dock.position.y + trashP.position.y, standsY: S.DESK_SLOTS.map(s => s.y) }), focusProof: () => ({ quiet: board.material.opacity < 1, plantProgress: plant.focus, plantStage: plant.stage }), voiceProof: () => ({ endpoint: cloudEndpoint, pending: pendingVoice, message: voiceMessage }), fps: () => fpsValue, refresh: () => { refreshMode(); applyA11y(); },
   dictate: (text: string) => applySaid(text),

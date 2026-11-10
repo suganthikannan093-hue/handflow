@@ -5,11 +5,13 @@
 //
 // The board itself is about 1.5× the old 0.48 × 0.34 m panel so titles and
 // the timer words fit. At 0.50 m that was wider than the 30° cone; at EYE
-// (0.7 m) the board and the raised timer both fit comfortably.
+// (1.0 m) the board and the raised timer both fit a typical 90° vertical FOV.
 
-export const EYE = 0.7;
+export const EYE = 1.0;
 /** Workspace origin sits this far below the eyes, so the button row stays in view. */
 export const EYE_DROP = 0.02;
+/** Level-look drop: board centre sits this far below eye height (0.15–0.25 m). */
+export const BOARD_BELOW_EYE = 0.2;
 export const COMFORT_RAD = Math.PI / 6;
 
 export const BOARD_Z = -0.02;
@@ -23,10 +25,14 @@ export const TIMER_X = 0;
 export const TIMER_Y = 0.52;
 export const TIMER_Z = 0.02;
 /**
- * XR origin drop from the eyes. Keeps the timer just under eye height and the
- * board in a seated downward view (IWER looks at the desk at about 35°).
+ * Default XR drop when the head looks level. Looking down adds more drop so
+ * the timer and board headers stay inside a 90° vertical FOV around the gaze.
  */
-export const XR_DROP = TIMER_Y + TIMER_H / 2 - 0.13;
+export const XR_DROP = BOARD_BELOW_EYE;
+/** Typical headset / IWER vertical field of view. */
+export const XR_FOV_V = Math.PI / 2;
+/** Keep content this far inside the 90° FOV (40° from the gaze centre). */
+export const XR_FOV_MARGIN = (40 * Math.PI) / 180;
 
 /** 25m / 5m / 1m chips on the idle Focus timer, below the digits. */
 export const DUR_W = 0.092;
@@ -98,8 +104,30 @@ export function flattenForward(x: number, _y: number, z: number) {
 }
 
 /**
- * Place the workspace origin `dist` metres in front of the head at seated eye
- * height, facing the user. The board's local +Z points back at the head.
+ * Vertical drop that keeps the timer top and board headers inside a 90° FOV
+ * around the current look, while a level look sits the board 0.15–0.25 m below
+ * the eyes. `preferred` is the level-look drop.
+ */
+export function xrDropForLook(
+  look: { x: number; y: number; z: number },
+  dist = EYE,
+  preferred = XR_DROP,
+  headY?: number,
+) {
+  const lookLen = Math.hypot(look.x, look.y, look.z) || 1;
+  const horiz = Math.hypot(look.x, look.z) / lookLen;
+  const pitchY = look.y / lookLen;
+  const gazeDrop = horiz > 0.12 ? dist * (-pitchY / horiz) : 0;
+  const slack = dist * Math.tan(XR_FOV_MARGIN);
+  let drop = Math.max(preferred, TIMER_Y + TIMER_H / 2 + gazeDrop - slack, BOARD_H / 2 + gazeDrop - slack);
+  if (headY != null && headY > 0.5) drop = Math.min(drop, Math.max(0.02, headY - 0.15));
+  return drop;
+}
+
+/**
+ * Place the workspace origin `dist` metres in front of the head, facing the
+ * user. The board's local +Z points back at the head. Drop follows the look
+ * so the timer and headers stay in a typical 90° vertical FOV.
  */
 export function workspacePoseFromHead(
   head: { x: number; y: number; z: number },
@@ -108,13 +136,59 @@ export function workspacePoseFromHead(
   drop = XR_DROP,
 ) {
   const dir = flattenForward(look.x, look.y, look.z);
+  const usedDrop = xrDropForLook(look, dist, drop, head.y);
   const position = {
     x: head.x + dir.x * dist,
-    y: head.y - drop,
+    y: head.y - usedDrop,
     z: head.z + dir.z * dist,
   };
   const facing = flattenForward(head.x - position.x, 0, head.z - position.z);
-  return { position, facing, dist };
+  return { position, facing, dist, drop: usedDrop };
+}
+
+/** Map a workspace-local point into world space for a yaw-only workspace pose. */
+export function workspaceLocalToWorld(
+  pose: { position: { x: number; y: number; z: number }; facing: { x: number; y: number; z: number } },
+  local: { x: number; y: number; z: number },
+) {
+  const fx = pose.facing.x, fz = pose.facing.z;
+  return {
+    x: pose.position.x + local.x * fz + local.z * fx,
+    y: pose.position.y + local.y,
+    z: pose.position.z + local.x * -fx + local.z * fz,
+  };
+}
+
+/**
+ * Project a world point into NDC of a symmetric vertical FOV around `look`.
+ * `ndcY` / `ndcX` are in [-1, 1] when the point is inside the FOV and in front.
+ */
+export function projectFromHead(
+  head: { x: number; y: number; z: number },
+  look: { x: number; y: number; z: number },
+  point: { x: number; y: number; z: number },
+  fovV = XR_FOV_V,
+  aspect = 1,
+) {
+  const fl = Math.hypot(look.x, look.y, look.z) || 1;
+  const fx = look.x / fl, fy = look.y / fl, fz = look.z / fl;
+  // right = worldUp × forward, then viewUp = forward × right.
+  let rx = fz, ry = 0, rz = -fx;
+  let rlen = Math.hypot(rx, ry, rz);
+  if (rlen < 1e-6) {
+    rx = 1; ry = 0; rz = 0;
+    rlen = 1;
+  }
+  rx /= rlen; ry /= rlen; rz /= rlen;
+  const ux = fy * rz - fz * ry, uy = fz * rx - fx * rz, uz = fx * ry - fy * rx;
+  const vx = point.x - head.x, vy = point.y - head.y, vz = point.z - head.z;
+  const depth = vx * fx + vy * fy + vz * fz;
+  const camX = vx * rx + vy * ry + vz * rz;
+  const camY = vx * ux + vy * uy + vz * uz;
+  const vTan = Math.tan(fovV / 2);
+  const ndcY = depth > 1e-6 ? camY / (depth * vTan) : 0;
+  const ndcX = depth > 1e-6 ? camX / (depth * vTan * aspect) : 0;
+  return { ndcX, ndcY, depth, inView: depth > 0.05 && Math.abs(ndcX) <= 1 && Math.abs(ndcY) <= 1 };
 }
 
 /**
