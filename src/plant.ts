@@ -26,11 +26,11 @@ export class Plant extends THREE.Group {
     this.stage = Math.max(0, Math.min(5, Math.round(stage)));
     this.focus = Math.max(0, Math.min(1, focus));
     const grown = this.stage + this.focus * 0.9;
-    const h = 0.028 + grown * 0.026;
+    const h = 0.04 + grown * 0.032;
     this.stem.visible = true;
     this.stem.scale.set(1, h / 0.08, 1);
     this.stem.position.y = 0.03 + h / 2;
-    const need = Math.min(5, Math.ceil(grown));
+    const need = Math.min(5, Math.max(this.focus > 0 || this.stage > 0 ? 1 : 0, Math.ceil(grown)));
     while (this.leaves.length < need) {
       const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), new THREE.MeshStandardMaterial({ color: this.leaves.length % 2 ? 0x7dffb3 : 0x3dcc7a }));
       leaf.scale.set(1.7, 0.45, 1); this.add(leaf); this.leaves.push(leaf);

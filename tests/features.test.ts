@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as S from '../src/state';
-import { fitsComfort, BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COL_W, COLUMN_PAGE, DESKTOP_CAM_Z, DOCK_Y, DOCK_Z, DOCK_HALF, TIMER_H, TIMER_Y, TIMER_Z, TIMER_W, PLANT_X } from '../src/layout';
+import { fitsComfort, BOARD_H, BOARD_W, BOARD_Z, CARD_H, CARD_SP, CARD_TOP, CARD_W, COL_W, COLUMN_PAGE, DESKTOP_CAM_Z, DOCK_Y, DOCK_Z, DOCK_HALF, MORE_H, MORE_Y, TIMER_H, TIMER_Y, TIMER_Z, TIMER_W, PLANT_X } from '../src/layout';
 
 const day = (y: number, m: number, d: number) => new Date(y, m - 1, d, 9, 0, 0);
 
@@ -303,5 +303,147 @@ describe('accessibility and tutorial', () => {
     const pinkyMeta = { x: -0.04, y: 0, z: -0.06 };
     expect(S.palmFacesViewer(wrist, indexMeta, pinkyMeta, { x: 0, y: -1, z: 0 })).toBe(true);
     expect(S.palmFacesViewer(wrist, indexMeta, pinkyMeta, { x: 0, y: 1, z: 0 })).toBe(false);
+  });
+});
+
+describe('review fixes', () => {
+  const cardsOf = (s: S.WorkspaceState) => S.visibleCardRects(s, COL_W, CARD_W, CARD_H, CARD_TOP, CARD_SP, COLUMN_PAGE);
+
+  it('fits Remember: hydrate inside the note, including when it is pinned', () => {
+    const text = 'Remember: hydrate';
+    const size = S.noteSize(text);
+    const ppm = 1200;
+    const W = size.w * ppm, H = size.h * ppm;
+    const top = 48, padX = 22, padBottom = 18;
+    const fit = S.fitWrappedText(text, W - padX * 2, H - top - padBottom, (sample, font) => sample.length * font * 0.55, 16, 32);
+    expect(fit.ellipsis).toBe(false);
+    expect(fit.lines.join(' ')).toMatch(/Remember/);
+    expect(fit.lines.join(' ')).toMatch(/hydrate/);
+    for (const line of fit.lines) expect(line.length * fit.font * 0.55).toBeLessThanOrEqual(W - padX * 2 + 1);
+    expect(fit.lines.length * fit.font * 1.28).toBeLessThanOrEqual(H - top - padBottom + 1);
+  });
+
+  it('seeds starter notes in free space so they do not cover the Doing cards', () => {
+    const s = S.createInitialState();
+    const blockers = cardsOf(s);
+    const seeded = S.seedStarterNotes(s, BOARD_W, BOARD_H, blockers);
+    expect(seeded.map(n => n.text)).toEqual([...S.STARTER_NOTES]);
+    expect(S.seedStarterNotes(s, BOARD_W, BOARD_H, blockers)).toHaveLength(0);
+    for (const n of seeded) {
+      const size = S.noteSize(n.text);
+      const rect = { x: n.pos[0], y: n.pos[1], w: size.w, h: size.h };
+      expect(S.noteFits(rect, BOARD_W, BOARD_H, blockers)).toBe(true);
+    }
+    const [a, b] = seeded.map(n => {
+      const size = S.noteSize(n.text);
+      return { x: n.pos[0], y: n.pos[1], w: size.w, h: size.h };
+    });
+    expect(S.rectsOverlap(a, b)).toBe(false);
+  });
+
+  it('moves a note that was saved on top of a Doing card into free space', () => {
+    const s = S.createInitialState();
+    const doing = S.cardsIn(s, 'doing')[0];
+    const n = S.addNote(s, [0, CARD_TOP, 0.012], 'Remember: hydrate');
+    n.pinned = true;
+    const blockers = cardsOf(s);
+    expect(S.rectsOverlap({ x: 0, y: CARD_TOP, w: S.noteSize(n.text).w, h: S.noteSize(n.text).h }, blockers.find(b => Math.abs(b.x) < 0.01)!)).toBe(true);
+    S.resolveBoardNotes(s, BOARD_W, BOARD_H, blockers);
+    const size = S.noteSize(n.text);
+    expect(S.noteFits({ x: n.pos[0], y: n.pos[1], w: size.w, h: size.h }, BOARD_W, BOARD_H, blockers)).toBe(true);
+    expect(doing.column).toBe('doing');
+  });
+
+  it('keeps a clear drop and relocates a drop that covers a card', () => {
+    const s = S.createInitialState();
+    const blockers = cardsOf(s);
+    const size = { w: 0.15, h: 0.13 };
+    const clear = S.pinNotePosition(BOARD_W, BOARD_H, size, blockers, { x: 0, y: -BOARD_H / 2 + 0.08 });
+    expect(clear).not.toBeNull();
+    expect(S.noteFits({ x: clear!.x, y: clear!.y, w: size.w, h: size.h }, BOARD_W, BOARD_H, blockers)).toBe(true);
+    const moved = S.pinNotePosition(BOARD_W, BOARD_H, size, blockers, { x: 0, y: CARD_TOP }, 0);
+    expect(moved).not.toBeNull();
+    expect(moved!.y).not.toBeCloseTo(CARD_TOP, 3);
+    expect(S.noteFits({ x: moved!.x, y: moved!.y, w: size.w, h: size.h }, BOARD_W, BOARD_H, blockers)).toBe(true);
+  });
+
+  it('sits the +N more chip below the column header and above the first card', () => {
+    const headerY = BOARD_H / 2 - (47 / (BOARD_H * 800)) * BOARD_H;
+    const headerHalf = (18 / (BOARD_H * 800)) * BOARD_H / 2;
+    expect(Math.abs(MORE_Y - headerY)).toBeGreaterThan((MORE_H + headerHalf * 2) / 2);
+    expect(MORE_Y - MORE_H / 2).toBeGreaterThan(CARD_TOP + CARD_H / 2);
+  });
+
+  it('does not restore a stale running break, but keeps a live focus and settles an expired one first', () => {
+    const kv = { m: new Map<string, string>(), getItem: (k: string) => kv.m.get(k) ?? null, setItem: (k: string, v: string) => void kv.m.set(k, v) };
+    const stale = S.createInitialState();
+    stale.timer.mode = 'break'; stale.timer.durationMs = S.BREAK_MS; stale.timer.remainingMs = 223_000;
+    stale.timer.running = true; stale.timer.startedAt = Date.now() - 77_000; stale.timer.endsAt = Date.now() + 223_000;
+    S.save(stale, kv, Date.now());
+    const loaded = S.load(kv);
+    expect(loaded.timer.mode).toBe('focus');
+    expect(loaded.timer.running).toBe(false);
+    expect(loaded.timer.remainingMs).toBe(S.FOCUS_MS);
+    expect(loaded.timer.durationMs).toBe(S.FOCUS_MS);
+
+    const live = S.createInitialState();
+    const start = Date.now();
+    S.startTimer(live.timer, start);
+    S.save(live, kv, start + 1000);
+    const kept = S.load(kv);
+    expect(kept.timer.running).toBe(true);
+    expect(kept.timer.mode).toBe('focus');
+
+    const done = S.createInitialState();
+    S.parkCard(done, done.cards[0].id, 1); done.focusId = done.cards[0].id;
+    done.timer.durationMs = 100; done.timer.remainingMs = 100; S.startTimer(done.timer, Date.now() - 200);
+    S.save(done, kv, Date.now() - 150);
+    const settled = S.load(kv);
+    expect(settled.cards[0].column).toBe('done');
+    expect(settled.habit.history.at(-1)?.focusSessions).toBe(1);
+    expect(settled.timer.mode).toBe('focus');
+    expect(settled.timer.running).toBe(false);
+    expect(settled.timer.remainingMs).toBe(S.FOCUS_MS);
+  });
+
+  it('shows plant growth as soon as a 1-minute focus starts, and a finished session grows the garden', () => {
+    const t = S.createInitialState().timer;
+    t.durationMs = 60_000; t.remainingMs = 60_000;
+    expect(S.liveFocusProgress(t, 0)).toBe(0);
+    S.startTimer(t, 0);
+    expect(S.liveFocusProgress(t, 0)).toBe(S.FOCUS_GROWTH_BOOST);
+    expect(S.liveFocusProgress(t, 30_000)).toBeGreaterThanOrEqual(0.5);
+    expect(S.liveFocusProgress(t, 60_000)).toBe(1);
+    const s = S.createInitialState();
+    s.timer.durationMs = 60_000; s.timer.remainingMs = 60_000;
+    S.startTimer(s.timer, 0);
+    expect(S.advanceWorkspaceTimer(s, 60_000, day(2026, 11, 10))).toBe(true);
+    expect(S.todayRecord(s.habit, day(2026, 11, 10)).focusSessions).toBe(1);
+    expect(S.gardenStage(S.todayRecord(s.habit, day(2026, 11, 10)))).toBeGreaterThanOrEqual(4);
+  });
+
+  it('skips the first-run tutorial without awarding a lesson streak', () => {
+    const s = S.createInitialState();
+    expect(s.onboarded).toBe(false);
+    S.skipTutorial(s);
+    expect(s.onboarded).toBe(true);
+    expect(s.tutorialStep).toBe(S.TUTORIAL_STEPS.length);
+    expect(s.habit.streak).toBe(0);
+    expect(S.TUTORIAL_INTRO.toLowerCase()).toContain('pinch');
+    expect(S.TUTORIAL_INTRO.toLowerCase()).toContain('poke');
+    expect(S.TUTORIAL_INTRO.toLowerCase()).toContain('palm');
+  });
+
+  it('opens the palm menu when the palm faces the viewer or is turned up', () => {
+    const wrist = { x: 0, y: 0, z: 0 };
+    const indexMeta = { x: 0.04, y: 0, z: -0.06 };
+    const pinkyMeta = { x: -0.04, y: 0, z: -0.06 };
+    const towardFace = S.palmAim(wrist, indexMeta, pinkyMeta, { x: 0, y: -1, z: 0 });
+    const away = S.palmAim(wrist, indexMeta, pinkyMeta, { x: 0, y: 1, z: 0 });
+    expect(S.palmMenuShouldShow(towardFace)).toBe(true);
+    expect(S.palmMenuShouldShow(away)).toBe(false);
+    expect(S.palmMenuShouldShow({ x: 0, y: 1, z: 0, dot: 0 })).toBe(true);
+    expect(S.palmMenuShouldShow({ x: 0, y: 0.2, z: 1, dot: 0.2 })).toBe(false);
+    expect(S.palmMenuShouldShow({ x: 0, y: 0.4, z: 1, dot: 0.33 }, true)).toBe(true);
   });
 });
