@@ -309,18 +309,20 @@ describe('accessibility and tutorial', () => {
 describe('review fixes', () => {
   const cardsOf = (s: S.WorkspaceState) => S.visibleCardRects(s, COL_W, CARD_W, CARD_H, CARD_TOP, CARD_SP, COLUMN_PAGE);
 
-  it('fits Remember: hydrate inside the note, including when it is pinned', () => {
+  it('wraps Remember: hydrate only at spaces at the real pinned note size', () => {
     const text = 'Remember: hydrate';
-    const size = S.noteSize(text);
-    const ppm = 1200;
-    const W = size.w * ppm, H = size.h * ppm;
-    const top = 48, padX = 22, padBottom = 18;
-    const fit = S.fitWrappedText(text, W - padX * 2, H - top - padBottom, (sample, font) => sample.length * font * 0.55, 16, 32);
+    const box = S.noteTextBox(true, S.noteSize(text));
+    // 700-weight system-ui is wider than the 0.55em headless fallback; this is the case that used to split "Remembe / r:".
+    const measure = (sample: string, font: number) => sample.length * font * 0.72;
+    const fit = S.fitWrappedText(text, box.maxWidth, box.maxHeight, measure, 16, 32);
     expect(fit.ellipsis).toBe(false);
-    expect(fit.lines.join(' ')).toMatch(/Remember/);
-    expect(fit.lines.join(' ')).toMatch(/hydrate/);
-    for (const line of fit.lines) expect(line.length * fit.font * 0.55).toBeLessThanOrEqual(W - padX * 2 + 1);
-    expect(fit.lines.length * fit.font * 1.28).toBeLessThanOrEqual(H - top - padBottom + 1);
+    expect(fit.lines.join(' ')).toBe(text);
+    expect(fit.lines.some(line => /Remembe$/.test(line) || /^r:/.test(line) || line.includes('Remembe r'))).toBe(false);
+    for (const line of fit.lines) {
+      expect(['Remember:', 'hydrate', 'Remember: hydrate']).toContain(line);
+      expect(measure(line, fit.font)).toBeLessThanOrEqual(box.maxWidth + 1);
+    }
+    expect(measure('Remember:', 32)).toBeGreaterThan(box.maxWidth);
   });
 
   it('seeds starter notes in free space so they do not cover the Doing cards', () => {
@@ -367,11 +369,15 @@ describe('review fixes', () => {
     expect(S.noteFits({ x: moved!.x, y: moved!.y, w: size.w, h: size.h }, BOARD_W, BOARD_H, blockers)).toBe(true);
   });
 
-  it('sits the +N more chip below the column header and above the first card', () => {
+  it('sits the +N more chip below the column header and above the first card, clear of the toast slot', () => {
     const headerY = BOARD_H / 2 - (47 / (BOARD_H * 800)) * BOARD_H;
     const headerHalf = (18 / (BOARD_H * 800)) * BOARD_H / 2;
     expect(Math.abs(MORE_Y - headerY)).toBeGreaterThan((MORE_H + headerHalf * 2) / 2);
     expect(MORE_Y - MORE_H / 2).toBeGreaterThan(CARD_TOP + CARD_H / 2);
+    const toastY = TIMER_Y - TIMER_H / 2 - 0.032;
+    const tutHalf = 0.035;
+    expect(toastY - tutHalf).toBeGreaterThan(headerY + headerHalf);
+    expect(toastY - tutHalf).toBeGreaterThan(MORE_Y + MORE_H / 2);
   });
 
   it('does not restore a stale running break, but keeps a live focus and settles an expired one first', () => {
@@ -425,13 +431,38 @@ describe('review fixes', () => {
   it('skips the first-run tutorial without awarding a lesson streak', () => {
     const s = S.createInitialState();
     expect(s.onboarded).toBe(false);
+    expect(S.needsOnboarding(s)).toBe(true);
     S.skipTutorial(s);
     expect(s.onboarded).toBe(true);
     expect(s.tutorialStep).toBe(S.TUTORIAL_STEPS.length);
+    expect(s.onboardingVersion).toBe(S.ONBOARDING_VERSION);
+    expect(S.needsOnboarding(s)).toBe(false);
     expect(s.habit.streak).toBe(0);
     expect(S.TUTORIAL_INTRO.toLowerCase()).toContain('pinch');
     expect(S.TUTORIAL_INTRO.toLowerCase()).toContain('poke');
     expect(S.TUTORIAL_INTRO.toLowerCase()).toContain('palm');
+  });
+
+  it('shows this onboarding version once to a returning visitor from an older save', () => {
+    const kv = { m: new Map<string, string>(), getItem: (k: string) => kv.m.get(k) ?? null, setItem: (k: string, v: string) => void kv.m.set(k, v) };
+    const s = S.createInitialState();
+    s.onboarded = true; s.tutorialStep = S.TUTORIAL_STEPS.length; s.habit.streak = 1;
+    S.save(s, kv, 0);
+    const raw = JSON.parse(kv.getItem(S.STORAGE_KEY)!);
+    delete raw.onboardingVersion;
+    kv.setItem(S.STORAGE_KEY, JSON.stringify(raw));
+    const loaded = S.load(kv);
+    expect(loaded.onboarded).toBe(true);
+    expect(loaded.habit.streak).toBe(1);
+    expect(S.needsOnboarding(loaded)).toBe(true);
+    S.skipTutorial(loaded);
+    expect(S.needsOnboarding(loaded)).toBe(false);
+    S.save(loaded, kv, 0);
+    expect(S.needsOnboarding(S.load(kv))).toBe(false);
+    S.replayTutorial(loaded);
+    expect(S.needsOnboarding(loaded)).toBe(true);
+    expect(loaded.onboarded).toBe(true);
+    expect(loaded.habit.streak).toBe(1);
   });
 
   it('opens the palm menu when the palm faces the viewer or is turned up', () => {

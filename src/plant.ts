@@ -23,8 +23,13 @@ export class Plant extends THREE.Group {
   setStage(stage: number) { this.setGrowth(stage, this.focus); }
   /** Stage from finished tasks, plus a visible stretch and bloom while focus is running. */
   setGrowth(stage: number, focus: number) {
-    this.stage = Math.max(0, Math.min(5, Math.round(stage)));
-    this.focus = Math.max(0, Math.min(1, focus));
+    const nextStage = Math.max(0, Math.min(5, Math.round(stage)));
+    const nextFocus = Math.max(0, Math.min(1, focus));
+    const same = nextStage === this.stage && Math.abs(nextFocus - this.focus) < 0.01;
+    this.stage = nextStage;
+    this.focus = nextFocus;
+    this.rotation.z = Math.sin(Date.now() / 380) * (this.focus > 0 ? 0.14 : 0);
+    if (same && this.leaves.length) return;
     const grown = this.stage + this.focus * 0.9;
     const h = 0.04 + grown * 0.032;
     this.stem.visible = true;
@@ -45,6 +50,5 @@ export class Plant extends THREE.Group {
     this.flower.visible = blooming;
     this.flower.scale.setScalar(this.stage >= 5 ? 1 : blooming ? 0.35 + this.focus * 0.75 : 0.45);
     this.flower.position.y = 0.034 + h;
-    this.rotation.z = Math.sin(Date.now() / 380) * (this.focus > 0 ? 0.14 : 0);
   }
 }

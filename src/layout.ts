@@ -18,9 +18,9 @@ export const BOARD_W = COL_W * 3 + 0.045;
 export const BOARD_H = 0.51;
 
 export const TIMER_W = 0.38;
-export const TIMER_H = 0.15;
+export const TIMER_H = 0.17;
 export const TIMER_X = 0;
-export const TIMER_Y = 0.355;
+export const TIMER_Y = 0.37;
 export const TIMER_Z = 0.02;
 
 export const PLANT_X = -0.24;
@@ -42,10 +42,10 @@ export const CARD_W = 0.2;
 export const CARD_H = 0.06;
 export const CARD_SP = 0.068;
 export const CARD_TOP = 0.07;
-/** “+N more” sits below the column header and above the first card. */
-export const MORE_Y = 0.14;
-export const MORE_H = 0.04;
-export const MORE_W = 0.14;
+/** “+N more” sits clearly below the column header and above the first card. */
+export const MORE_Y = 0.125;
+export const MORE_H = 0.026;
+export const MORE_W = 0.12;
 
 export function comfortLimit(z: number) {
   return (EYE - z) * Math.tan(COMFORT_RAD);

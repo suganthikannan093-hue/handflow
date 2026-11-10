@@ -14,8 +14,8 @@ test('custom capture, next step, quiet focus and reload are one usable workflow'
   await page.getByRole('button', { name: 'Add to my workspace' }).click();
   await expect(page.locator('#desk-summary')).toContainText('Open with the customer problem');
   await page.getByLabel('Focus length').selectOption('1');
-  // Onboarding must be completable separately; test quiet mode for a returning user.
-  await page.evaluate(() => { (window as any).handflow.state.onboarded = true; });
+  // Quiet mode is for someone who has already seen this onboarding version.
+  await page.evaluate(() => { (window as any).handflow.skipTutorial(); });
   await page.getByRole('button', { name: 'Start focus', exact: true }).click();
   await page.getByRole('button', { name: 'Close desk' }).click();
   await page.waitForFunction(() => (window as any).handflow.focusProof().quiet);

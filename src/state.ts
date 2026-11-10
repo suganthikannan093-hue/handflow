@@ -24,7 +24,7 @@ export interface Habit { mode: DayMode; streak: number; lastDate: string | null;
 export interface Placement { position: [number, number, number]; quaternion: [number, number, number, number]; anchorId: string | null; surface?: 'desk' | 'wall' }
 export interface WorkspaceState {
   version: 1; cards: Card[]; notes: Note[]; timer: Timer; onboarded: boolean;
-  tutorialStep: number; a11y: A11y; habit: Habit; placement: Placement | null; mrPreferred: boolean;
+  tutorialStep: number; onboardingVersion: number; a11y: A11y; habit: Habit; placement: Placement | null; mrPreferred: boolean;
   focusId: string | null;
 }
 /** Three stands in front of the board, inside the 30° cone. A task left here stays across sessions. */
@@ -63,6 +63,12 @@ export const TUTORIAL_STEPS = [
 ] as const;
 /** First-run cue shown above the guided steps. */
 export const TUTORIAL_INTRO = 'Pinch to grab · Poke to press · Palm toward you for the menu';
+/** Bump this when the first-run coach changes so returning visitors see the new version once. */
+export const ONBOARDING_VERSION = 2;
+export function needsOnboarding(s: Pick<WorkspaceState, 'onboardingVersion'>) {
+  return (s.onboardingVersion ?? 0) < ONBOARDING_VERSION;
+}
+export const FOCUS_LENGTHS_MIN = [25, 5, 1] as const;
 /** Pinch starts under 2cm and stays held until the fingers open past 3.5cm. */
 export const PINCH_START = 0.02;
 export const PINCH_RELEASE = 0.035;
@@ -85,7 +91,7 @@ export const uid = (p: string) => `${p}_${Date.now().toString(36)}_${(seq++).toS
 
 export function createInitialState(): WorkspaceState {
   const s: WorkspaceState = {
-    version: 1, cards: [], notes: [], onboarded: false, tutorialStep: 0,
+    version: 1, cards: [], notes: [], onboarded: false, tutorialStep: 0, onboardingVersion: 0,
     a11y: defaultA11y(), habit: defaultHabit(), placement: null, mrPreferred: true, focusId: null,
     timer: { durationMs: FOCUS_MS, remainingMs: FOCUS_MS, running: false, startedAt: null, endsAt: null, mode: 'focus', completed: 0 },
   };
@@ -188,19 +194,10 @@ export function wrapToWidth(text: string, maxWidth: number, measure: (sample: st
   if (!words.length) return [];
   const lines: string[] = [];
   let line = '';
-  const pushWord = (word: string) => {
-    if (measure(word) <= maxWidth) { line = word; return; }
-    let chunk = '';
-    for (const ch of word) {
-      if (chunk && measure(chunk + ch) > maxWidth) { lines.push(chunk); chunk = ch; }
-      else chunk += ch;
-    }
-    line = chunk;
-  };
   for (const word of words) {
     const trial = line ? line + ' ' + word : word;
-    if (measure(trial) <= maxWidth) line = trial;
-    else { if (line) lines.push(line); pushWord(word); }
+    if (!line || measure(trial) <= maxWidth) line = trial;
+    else { lines.push(line); line = word; }
   }
   if (line) lines.push(line);
   return lines;
@@ -211,22 +208,41 @@ function widthAt(measure: (sample: string, font: number) => number, sample: stri
   // A zero result (headless measureText) would otherwise treat every line as fitting.
   return w > 0 ? w : Math.max(1, sample.length) * font * 0.55;
 }
+export const NOTE_PPM = 1200;
+export const NOTE_PAD_X = 22;
+export const NOTE_PIN_TOP = 48;
+export const NOTE_PAD_BOTTOM = 18;
+export function noteTextBox(pinned: boolean, size = noteSize('Remember: hydrate')) {
+  const W = size.w * NOTE_PPM, H = size.h * NOTE_PPM;
+  const top = pinned ? NOTE_PIN_TOP : 24;
+  return { W, H, maxWidth: W - NOTE_PAD_X * 2, maxHeight: H - top - NOTE_PAD_BOTTOM };
+}
 export function fitWrappedText(text: string, maxWidth: number, maxHeight: number, measure: (sample: string, font: number) => number, minFont = 14, maxFont = 32) {
+  const words = text.trim().split(/\s+/).filter(Boolean);
   const at = (font: number) => (sample: string) => widthAt(measure, sample, font);
+  const fits = (font: number) => {
+    const m = at(font);
+    if (words.some(w => m(w) > maxWidth)) return null;
+    const lines = wrapToWidth(text, maxWidth, m);
+    if (lines.length * font * 1.25 > maxHeight) return null;
+    return lines;
+  };
   let font = maxFont;
-  while (font >= minFont) {
-    const lines = wrapToWidth(text, maxWidth, at(font));
-    if (lines.length * font * 1.25 <= maxHeight) return { font, lines, ellipsis: false };
+  const floor = Math.min(minFont, 10);
+  while (font >= floor) {
+    const lines = fits(font);
+    if (lines) return { font, lines, ellipsis: false };
     font -= 1;
   }
-  const all = wrapToWidth(text, maxWidth, at(minFont));
-  const maxLines = Math.max(1, Math.floor(maxHeight / (minFont * 1.25)));
-  if (all.length <= maxLines) return { font: minFont, lines: all, ellipsis: false };
+  const m = at(floor);
+  const all = wrapToWidth(text, maxWidth, m);
+  const maxLines = Math.max(1, Math.floor(maxHeight / (floor * 1.25)));
+  if (all.length <= maxLines && !words.some(w => m(w) > maxWidth)) return { font: floor, lines: all, ellipsis: false };
   const lines = all.slice(0, maxLines);
-  let last = lines[maxLines - 1];
-  while (last.length > 1 && at(minFont)(last + '…') > maxWidth) last = last.slice(0, -1);
+  let last = lines[maxLines - 1] ?? '';
+  while (last.length > 1 && m(last + '…') > maxWidth) last = last.slice(0, -1);
   lines[maxLines - 1] = last.replace(/…$/, '') + '…';
-  return { font: minFont, lines, ellipsis: true };
+  return { font: floor, lines, ellipsis: true };
 }
 
 // ---- Timer (time injected for testability) ----
@@ -492,14 +508,24 @@ export function captureBoard(s: WorkspaceState): BoardSnap {
 export function restoreBoard(s: WorkspaceState, snap: BoardSnap) {
   s.cards = snap.cards; s.notes = snap.notes; s.focusId = snap.focusId; s.habit = snap.habit;
 }
+export function markOnboarded(s: WorkspaceState) {
+  s.onboarded = true;
+  s.tutorialStep = TUTORIAL_STEPS.length;
+  s.onboardingVersion = ONBOARDING_VERSION;
+}
 export function finishTutorial(s: WorkspaceState, elapsedMs: number, now = new Date()) {
-  s.onboarded = true; s.tutorialStep = TUTORIAL_STEPS.length;
+  markOnboarded(s);
   if (s.habit.streak === 0) { ensureToday(s.habit, now); s.habit.streak = 1; }
   return tutorialPayoff(elapsedMs);
 }
 /** Dismiss first-run coaching without treating it as a completed lesson. */
 export function skipTutorial(s: WorkspaceState) {
-  s.onboarded = true; s.tutorialStep = TUTORIAL_STEPS.length;
+  markOnboarded(s);
+}
+/** Replay this version of the coach without wiping a returning visitor's board or streak. */
+export function replayTutorial(s: WorkspaceState) {
+  s.tutorialStep = 0;
+  s.onboardingVersion = 0;
 }
 
 export type AgentKind = 'cue' | 'plan' | 'card' | 'note' | 'empty' | 'focus' | 'park' | 'done' | 'winddown' | 'reviewed' | 'status';
@@ -623,6 +649,7 @@ function hydrate(s: WorkspaceState): WorkspaceState {
   s.placement = s.placement ?? null;
   if (typeof s.mrPreferred !== 'boolean') s.mrPreferred = true;
   if (typeof s.tutorialStep !== 'number') s.tutorialStep = s.onboarded ? TUTORIAL_STEPS.length : 0;
+  if (typeof s.onboardingVersion !== 'number') s.onboardingVersion = 0;
   if (!s.a11y.dwellMs) s.a11y.dwellMs = 800;
   s.focusId = typeof s.focusId === 'string' ? s.focusId : null;
   s.timer.endsAt = typeof s.timer.endsAt === 'number' ? s.timer.endsAt : null;
